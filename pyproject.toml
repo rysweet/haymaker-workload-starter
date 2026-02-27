@@ -1,0 +1,77 @@
+[project]
+name = "haymaker-my-workload"
+version = "0.1.0"
+description = "A custom workload for Agent Haymaker"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [
+    { name = "Your Name", email = "you@example.com" }
+]
+keywords = ["haymaker", "workload"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "agent-haymaker>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "pyright>=1.1.0",
+    "pre-commit>=3.0.0",
+]
+ai = [
+    "agent-haymaker[llm]>=0.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/rysweet/haymaker-workload-starter"
+Repository = "https://github.com/rysweet/haymaker-workload-starter"
+Issues = "https://github.com/rysweet/haymaker-workload-starter/issues"
+
+# Register your workload with agent-haymaker.
+# The key is the workload name, the value is "module:ClassName".
+[project.entry-points."agent_haymaker.workloads"]
+my-workload = "haymaker_my_workload:MyWorkload"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/haymaker_my_workload"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+include = ["src"]
+
+[tool.coverage.run]
+source = ["haymaker_my_workload"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80

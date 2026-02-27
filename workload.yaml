@@ -1,0 +1,43 @@
+name: my-workload
+version: "0.1.0"
+type: runtime
+description: "A starter workload template for Agent Haymaker"
+
+package:
+  name: haymaker-my-workload
+  entrypoint: haymaker_my_workload:MyWorkload
+
+# Define what your workload needs to operate on.
+# Examples: azure_subscription, m365_tenant, kubernetes_cluster
+targets:
+  - type: azure_subscription
+    required_roles:
+      - Contributor
+    description: "Azure subscription for workload resources"
+
+# Define credentials your workload needs.
+# These are fetched via self.get_credential() at runtime.
+credentials:
+  - name: MY_API_KEY
+    required: false
+    description: "Optional API key for external service"
+
+# Define the configuration schema for your workload.
+# Users pass these via: haymaker deploy my-workload --config key=value
+config_schema:
+  item_count:
+    type: integer
+    default: 10
+    min: 1
+    max: 1000
+    description: "Number of items to process per cycle"
+  interval_seconds:
+    type: integer
+    default: 60
+    min: 10
+    description: "Seconds between processing cycles"
+  mode:
+    type: string
+    default: "normal"
+    enum: ["normal", "verbose", "dry-run"]
+    description: "Execution mode"
