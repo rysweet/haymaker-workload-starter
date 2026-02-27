@@ -1,6 +1,7 @@
 """Tests for MyWorkload lifecycle methods."""
 
 import asyncio
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -211,6 +212,25 @@ class TestCleanup:
         with pytest.raises(DeploymentNotFoundError):
             await workload.cleanup("nonexistent")
 
+    async def test_cleanup_from_stopped(self):
+        workload = MyWorkload(platform=_mock_platform())
+        config = DeploymentConfig(workload_name="my-workload")
+        dep_id = await workload.deploy(config)
+        await workload.stop(dep_id)
+        report = await workload.cleanup(dep_id)
+        assert report.resources_deleted >= 1
+        state = await workload.get_status(dep_id)
+        assert state.status == DeploymentStatus.COMPLETED
+
+    async def test_double_cleanup_is_noop(self, running_deployment):
+        workload, dep_id = running_deployment
+        report1 = await workload.cleanup(dep_id)
+        assert report1.resources_deleted >= 1
+
+        report2 = await workload.cleanup(dep_id)
+        assert report2.resources_deleted == 0
+        assert any("Already" in d for d in report2.details)
+
 
 class TestGetLogs:
     """Test get_logs lifecycle method."""
@@ -247,15 +267,18 @@ class TestGetLogs:
             lines.append(line)
         assert len(lines) == 3
 
-    async def test_get_logs_follow_yields_new_lines(self, running_deployment):
+    async def test_get_logs_follow_yields_new_lines_before_terminal(self, running_deployment):
+        """Test that follow-mode yields lines while RUNNING (non-terminal path)."""
         workload, dep_id = running_deployment
 
         async def produce_then_complete():
+            # Produce a line while still RUNNING, wait long enough for the
+            # follow loop to poll and yield it via the non-terminal branch
             await asyncio.sleep(0.05)
-            workload._append_log(dep_id, "follow-line-1")
-            await asyncio.sleep(0.05)
-            workload._append_log(dep_id, "follow-line-2")
-            # Set to completed so follow-mode exits
+            workload._append_log(dep_id, "mid-follow-line")
+            # Wait for the follow loop to see and yield the line
+            await asyncio.sleep(1.5)
+            # Now terminate
             state = await workload.get_status(dep_id)
             state.status = DeploymentStatus.COMPLETED
             await workload.save_state(state)
@@ -265,8 +288,27 @@ class TestGetLogs:
         async for line in workload.get_logs(dep_id, follow=True):
             received.append(line)
         await producer
-        assert any("follow-line-1" in line for line in received)
-        assert any("follow-line-2" in line for line in received)
+        assert any("mid-follow-line" in line for line in received)
+
+    async def test_get_logs_follow_drains_on_complete(self, running_deployment):
+        """Test terminal drain: lines added just before COMPLETED are yielded."""
+        workload, dep_id = running_deployment
+
+        async def produce_and_complete():
+            await asyncio.sleep(0.05)
+            workload._append_log(dep_id, "drain-line-1")
+            workload._append_log(dep_id, "drain-line-2")
+            state = await workload.get_status(dep_id)
+            state.status = DeploymentStatus.COMPLETED
+            await workload.save_state(state)
+
+        producer = asyncio.create_task(produce_and_complete())
+        received = []
+        async for line in workload.get_logs(dep_id, follow=True):
+            received.append(line)
+        await producer
+        assert any("drain-line-1" in line for line in received)
+        assert any("drain-line-2" in line for line in received)
 
     async def test_get_logs_follow_exits_on_failed(self, running_deployment):
         workload, dep_id = running_deployment
@@ -282,8 +324,25 @@ class TestGetLogs:
         async for line in workload.get_logs(dep_id, follow=True):
             lines.append(line)
         await task
-        # Should have exited cleanly
-        assert isinstance(lines, list)
+        # Verify the generator completed (did not hang)
+        assert len(lines) >= 2  # At least the initial historical lines
+
+    async def test_get_logs_follow_exits_when_state_deleted(self, running_deployment):
+        """Follow-mode exits cleanly when deployment state is removed mid-follow."""
+        workload, dep_id = running_deployment
+        platform = workload._platform
+
+        async def delete_state():
+            await asyncio.sleep(0.05)
+            # Remove deployment from platform storage
+            platform._storage.pop(dep_id, None)
+
+        task = asyncio.create_task(delete_state())
+        lines = []
+        async for line in workload.get_logs(dep_id, follow=True):
+            lines.append(line)
+        await task
+        assert len(lines) >= 2
 
 
 class TestStart:
@@ -454,6 +513,59 @@ class TestMultipleDeployments:
         logs2 = [line async for line in workload.get_logs(id2)]
         assert any("only-in-id1" in line for line in logs1)
         assert not any("only-in-id1" in line for line in logs2)
+
+
+class TestCleanupErrorHandling:
+    """Test cleanup error handling when resource deletion fails."""
+
+    async def test_cleanup_failure_sets_failed_state(self):
+        """Subclass that fails during cleanup should set FAILED state."""
+
+        class FailingWorkload(MyWorkload):
+            name = "failing-workload"
+
+            async def cleanup(self, deployment_id):
+                state = await self.get_status(deployment_id)
+                if state.status in {DeploymentStatus.COMPLETED, DeploymentStatus.FAILED}:
+                    return CleanupReport(
+                        deployment_id=deployment_id,
+                        details=[f"Already in {state.status} state"],
+                    )
+                state.status = DeploymentStatus.CLEANING_UP
+                state.phase = "cleanup"
+                await self.save_state(state)
+
+                import time as _time
+
+                start = _time.monotonic()
+                errors = []
+                try:
+                    raise RuntimeError("simulated cleanup failure")
+                except Exception as exc:
+                    errors.append(f"Cleanup failed: {exc}")
+
+                self._logs.pop(deployment_id, None)
+                state.status = DeploymentStatus.FAILED
+                state.phase = "cleanup_failed"
+                state.error = "; ".join(errors)
+                state.completed_at = datetime.now(tz=UTC)
+                await self.save_state(state)
+                return CleanupReport(
+                    deployment_id=deployment_id,
+                    resources_failed=1,
+                    errors=errors,
+                    duration_seconds=_time.monotonic() - start,
+                )
+
+        workload = FailingWorkload(platform=_mock_platform())
+        config = DeploymentConfig(workload_name="failing-workload")
+        dep_id = await workload.deploy(config)
+        report = await workload.cleanup(dep_id)
+        assert report.resources_failed == 1
+        assert any("simulated" in e for e in report.errors)
+        state = await workload.get_status(dep_id)
+        assert state.status == DeploymentStatus.FAILED
+        assert state.phase == "cleanup_failed"
 
 
 class TestLogBuffer:

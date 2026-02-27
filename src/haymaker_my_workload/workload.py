@@ -30,6 +30,7 @@ from agent_haymaker.workloads.models import (
     DeploymentState,
     DeploymentStatus,
 )
+from agent_haymaker.workloads.platform import Platform
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class MyWorkload(WorkloadBase):
     # Unique workload name - used by CLI: haymaker deploy <name>
     name = "my-workload"
 
-    def __init__(self, platform=None):
+    def __init__(self, platform: Platform | None = None) -> None:
         super().__init__(platform=platform)
         # In-memory log buffer (replace with your logging backend).
         # Capped at _MAX_LOG_LINES per deployment to prevent unbounded growth.
@@ -170,6 +171,14 @@ class MyWorkload(WorkloadBase):
         Track what was deleted and any errors in the CleanupReport.
         """
         state = await self.get_status(deployment_id)
+
+        # Guard against double-cleanup
+        if state.status in _TERMINAL_STATES:
+            return CleanupReport(
+                deployment_id=deployment_id,
+                details=[f"Already in {state.status} state, nothing to clean up"],
+            )
+
         self._append_log(deployment_id, "Starting cleanup")
 
         state.status = DeploymentStatus.CLEANING_UP
@@ -181,22 +190,28 @@ class MyWorkload(WorkloadBase):
         details: list[str] = []
         start_time = time.monotonic()
 
-        # TODO: Delete your resources here. Example:
-        # try:
-        #     await self._delete_resources(deployment_id)
-        #     deleted += 1
-        #     details.append("Deleted resource group")
-        # except Exception as e:
-        #     errors.append(f"Failed to delete resource group: {e}")
-
-        details.append(f"Cleaned up deployment {deployment_id}")
-        deleted += 1
+        # TODO: Delete your resources here. Wrap each operation in try/except
+        # so partial failures are captured in the report.
+        try:
+            # Example:
+            #     await self._delete_resources(deployment_id)
+            #     deleted += 1
+            #     details.append("Deleted resource group")
+            details.append(f"Cleaned up deployment {deployment_id}")
+            deleted += 1
+        except Exception as exc:
+            errors.append(f"Cleanup failed: {exc}")
 
         # Clean up local state
         self._logs.pop(deployment_id, None)
 
-        state.status = DeploymentStatus.COMPLETED
-        state.phase = "cleaned_up"
+        if errors:
+            state.status = DeploymentStatus.FAILED
+            state.phase = "cleanup_failed"
+            state.error = "; ".join(errors)
+        else:
+            state.status = DeploymentStatus.COMPLETED
+            state.phase = "cleaned_up"
         state.completed_at = datetime.now(tz=UTC)
         await self.save_state(state)
 

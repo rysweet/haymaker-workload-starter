@@ -1,7 +1,7 @@
 [project]
 name = "haymaker-my-workload"
 version = "0.1.0"
-description = "A custom workload for Agent Haymaker"
+description = "A starter workload template for Agent Haymaker"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"

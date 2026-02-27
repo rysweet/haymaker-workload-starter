@@ -209,19 +209,19 @@ Your workload transitions through these states:
 
 ```
 RUNNING ⇄ STOPPED
-   ↓
-CLEANING_UP → COMPLETED
-   ↓
-FAILED (on error)
+   ↓         ↓
+CLEANING_UP ──┘
+   ├── COMPLETED  (success)
+   └── FAILED     (cleanup error)
 ```
 
-`deploy()` sets the initial state to `RUNNING`. The `stop()` method only works
-on `RUNNING` or `PENDING` deployments. `cleanup()` is destructive and final.
-Logs follow mode automatically exits when the deployment reaches `COMPLETED` or `FAILED`.
+`deploy()` sets the initial state to `RUNNING`. `stop()` only works on `RUNNING`
+or `PENDING` deployments. `cleanup()` is destructive and final -- it sets
+`COMPLETED` on success or `FAILED` if resource deletion errors occur. Double-cleanup
+is a safe no-op. Follow-mode logs automatically exit on `COMPLETED` or `FAILED`.
 
-> **Note:** The `PENDING` and `FAILED` states are available in the `DeploymentStatus`
-> enum but are not used by the starter template. Add them when your workload has
-> async provisioning (PENDING) or error recovery (FAILED) needs.
+> **Note:** The `PENDING` state is available but not used by the starter template.
+> Add it when your workload has async provisioning needs.
 
 ## Testing Your Workload
 
@@ -229,7 +229,7 @@ The included tests cover the full lifecycle. Add tests for your domain logic:
 
 ```python
 async def test_my_custom_behavior(self):
-    workload = MyWorkload(platform=mock_platform())
+    workload = MyWorkload(platform=_mock_platform())
     config = DeploymentConfig(
         workload_name="my-workload",
         workload_config={"item_count": 100},
