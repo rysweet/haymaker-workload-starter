@@ -228,14 +228,17 @@ is a safe no-op. Follow-mode logs automatically exit on `COMPLETED` or `FAILED`.
 The included tests cover the full lifecycle. Add tests for your domain logic:
 
 ```python
-async def test_my_custom_behavior(self):
-    workload = MyWorkload(platform=_mock_platform())
-    config = DeploymentConfig(
-        workload_name="my-workload",
-        workload_config={"item_count": 100},
-    )
-    dep_id = await workload.deploy(config)
-    # Assert your domain-specific behavior
+class TestMyCustomBehavior:
+    async def test_deploy_processes_items(self):
+        workload = MyWorkload(platform=_mock_platform())
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"item_count": 100},
+        )
+        dep_id = await workload.deploy(config)
+        state = await workload.get_status(dep_id)
+        assert state.metadata["item_count"] == 100
+        # Add your domain-specific assertions here
 ```
 
 ## License
