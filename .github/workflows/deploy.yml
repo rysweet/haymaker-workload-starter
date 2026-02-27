@@ -1,0 +1,207 @@
+name: Deploy to Azure
+
+# Manual trigger only -- prevents accidental deployments.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "dev"
+        type: choice
+        options: [dev, staging, prod]
+      location:
+        description: "Azure region"
+        required: true
+        default: "eastus"
+        type: string
+
+# OIDC requires these permissions for the GitHub token.
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RG_NAME: haymaker-starter-${{ inputs.environment }}-rg
+  ACR_NAME: hmstarter${{ inputs.environment }}
+
+jobs:
+  # -------------------------------------------------------------------
+  # Job 1: Build container image and push to ACR
+  # -------------------------------------------------------------------
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.push.outputs.image }}
+      acr_name: ${{ steps.create-acr.outputs.acr_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Create resource group
+        run: |
+          az group create \
+            --name "$RG_NAME" \
+            --location "${{ inputs.location }}" \
+            --tags Environment=${{ inputs.environment }} Project=haymaker-starter
+
+      - name: Create ACR (idempotent)
+        id: create-acr
+        run: |
+          # ACR names must be globally unique -- append a hash
+          HASH=$(echo "${{ secrets.AZURE_SUBSCRIPTION_ID }}" | md5sum | cut -c1-6)
+          ACR="${ACR_NAME}${HASH}"
+          az acr create \
+            --name "$ACR" \
+            --resource-group "$RG_NAME" \
+            --sku Basic \
+            --admin-enabled false \
+            2>/dev/null || true
+          echo "acr_name=$ACR" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        id: push
+        run: |
+          ACR="${{ steps.create-acr.outputs.acr_name }}"
+          IMAGE="${ACR}.azurecr.io/haymaker-workload:${{ github.sha }}"
+
+          az acr login --name "$ACR"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+          # Also tag as latest
+          docker tag "$IMAGE" "${ACR}.azurecr.io/haymaker-workload:latest"
+          docker push "${ACR}.azurecr.io/haymaker-workload:latest"
+
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+  # -------------------------------------------------------------------
+  # Job 2: Deploy infrastructure via Bicep
+  # -------------------------------------------------------------------
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      app_name: ${{ steps.bicep.outputs.app_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy Bicep
+        id: bicep
+        run: |
+          RESULT=$(az deployment group create \
+            --resource-group "$RG_NAME" \
+            --template-file infra/main.bicep \
+            --parameters \
+              image="${{ needs.build.outputs.image }}" \
+              acrName="${{ needs.build.outputs.acr_name }}" \
+              environment="${{ inputs.environment }}" \
+            --query "properties.outputs" \
+            -o json)
+
+          APP_NAME=$(echo "$RESULT" | jq -r '.appName.value')
+          echo "app_name=$APP_NAME" >> "$GITHUB_OUTPUT"
+          echo "Deployed Container App: $APP_NAME"
+
+      - name: Wait for container to be ready
+        run: |
+          APP="${{ steps.bicep.outputs.app_name }}"
+          echo "Waiting for container app $APP to be ready..."
+          for i in $(seq 1 20); do
+            STATUS=$(az containerapp show \
+              --name "$APP" \
+              --resource-group "$RG_NAME" \
+              --query "properties.provisioningState" -o tsv 2>/dev/null || echo "pending")
+            echo "  Attempt $i: $STATUS"
+            if [ "$STATUS" = "Succeeded" ]; then
+              echo "Container app is ready."
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "Timed out waiting for container app."
+          exit 1
+
+  # -------------------------------------------------------------------
+  # Job 3: E2E verification using haymaker CLI inside the container
+  # -------------------------------------------------------------------
+  verify:
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Haymaker E2E - workload list
+        run: |
+          APP="${{ needs.deploy.outputs.app_name }}"
+          echo "==> haymaker workload list"
+          az containerapp exec \
+            --name "$APP" \
+            --resource-group "$RG_NAME" \
+            --command "haymaker workload list"
+
+      - name: Haymaker E2E - deploy, status, logs, cleanup
+        run: |
+          APP="${{ needs.deploy.outputs.app_name }}"
+
+          echo "==> haymaker deploy my-workload"
+          DEPLOY_OUTPUT=$(az containerapp exec \
+            --name "$APP" \
+            --resource-group "$RG_NAME" \
+            --command "haymaker deploy my-workload --config item_count=5 --yes")
+          echo "$DEPLOY_OUTPUT"
+
+          # Extract deployment ID from output
+          DEPLOYMENT_ID=$(echo "$DEPLOY_OUTPUT" | grep -oP 'my-workload-[a-f0-9]+')
+          echo "Deployment ID: $DEPLOYMENT_ID"
+
+          echo "==> haymaker status"
+          az containerapp exec \
+            --name "$APP" \
+            --resource-group "$RG_NAME" \
+            --command "haymaker status $DEPLOYMENT_ID"
+
+          echo "==> haymaker logs"
+          az containerapp exec \
+            --name "$APP" \
+            --resource-group "$RG_NAME" \
+            --command "haymaker logs $DEPLOYMENT_ID"
+
+          echo "==> haymaker stop"
+          az containerapp exec \
+            --name "$APP" \
+            --resource-group "$RG_NAME" \
+            --command "haymaker stop $DEPLOYMENT_ID --yes"
+
+          echo "==> haymaker start"
+          az containerapp exec \
+            --name "$APP" \
+            --resource-group "$RG_NAME" \
+            --command "haymaker start $DEPLOYMENT_ID"
+
+          echo "==> haymaker cleanup"
+          az containerapp exec \
+            --name "$APP" \
+            --resource-group "$RG_NAME" \
+            --command "haymaker cleanup $DEPLOYMENT_ID --yes"
+
+          echo ""
+          echo "=== E2E verification complete ==="

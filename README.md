@@ -29,9 +29,12 @@ haymaker deploy my-workload --config item_count=25
 haymaker-workload-starter/
 ├── pyproject.toml                     # Package config + workload entry point
 ├── workload.yaml                      # Workload manifest (metadata + config schema)
-├── .env.example                       # Credential template
-├── .pre-commit-config.yaml            # Code quality hooks
-├── .github/workflows/ci.yml           # CI pipeline
+├── Dockerfile                         # Container image for Azure deployment
+├── infra/main.bicep                   # Azure infrastructure (Container Apps)
+├── scripts/setup-oidc.sh              # One-time OIDC federation setup
+├── .github/workflows/
+│   ├── ci.yml                         # Lint + test on every push/PR
+│   └── deploy.yml                     # Deploy to Azure (manual trigger)
 ├── src/haymaker_my_workload/
 │   ├── __init__.py                    # Public API
 │   └── workload.py                    # Workload implementation (start here)
@@ -240,6 +243,77 @@ class TestMyCustomBehavior:
         assert state.metadata["item_count"] == 100
         # Add your domain-specific assertions here
 ```
+
+## Deploy to Azure
+
+The repo includes a GitHub Actions workflow that deploys your workload to
+Azure Container Apps using OIDC -- no stored secrets beyond three Azure IDs.
+
+### Prerequisites
+
+- Azure subscription
+- Azure CLI: `az login`
+- GitHub CLI: `gh auth login`
+
+### One-time setup
+
+Run the OIDC setup script to create a service principal with federated credentials
+and set the required GitHub secrets:
+
+```bash
+./scripts/setup-oidc.sh your-org/your-repo
+```
+
+This creates three repository secrets:
+- `AZURE_CLIENT_ID` -- service principal app ID
+- `AZURE_TENANT_ID` -- Azure AD tenant
+- `AZURE_SUBSCRIPTION_ID` -- target subscription
+
+No passwords are stored. GitHub Actions authenticates via OIDC token exchange.
+
+### Deploy
+
+Trigger the deployment manually from GitHub Actions:
+
+```bash
+gh workflow run deploy.yml -f environment=dev -f location=eastus
+```
+
+The workflow:
+1. Builds a Docker image with your workload installed
+2. Pushes to Azure Container Registry
+3. Deploys to Container Apps (Consumption tier, near-zero cost)
+4. Runs full E2E verification using the haymaker CLI:
+
+```
+haymaker workload list          # verify workload registered
+haymaker deploy my-workload     # start a deployment
+haymaker status <id>            # check status
+haymaker logs <id>              # view logs
+haymaker stop <id>              # pause
+haymaker start <id>             # resume
+haymaker cleanup <id>           # tear down
+```
+
+### Clean up
+
+Delete the Azure resource group when done:
+
+```bash
+az group delete --name haymaker-starter-dev-rg --yes --no-wait
+```
+
+### How OIDC works
+
+```
+GitHub Actions  ──OIDC token──▶  Azure AD  ──validates──▶  grants access
+                                     │
+                     federated credential matches:
+                     repo:org/repo:ref:refs/heads/main
+```
+
+No service principal passwords are stored in GitHub. Azure trusts GitHub's
+OIDC tokens based on the federated credential configuration.
 
 ## License
 
