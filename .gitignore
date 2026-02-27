@@ -35,4 +35,3 @@ Thumbs.db
 
 # Secrets
 .env
-.secrets.baseline

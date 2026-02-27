@@ -34,5 +34,5 @@ jobs:
       - name: Type check with pyright
         run: pyright src/
 
-      - name: Run tests
-        run: pytest --cov --cov-report=term-missing -q
+      - name: Run tests with coverage
+        run: pytest --cov --cov-report=term-missing --cov-fail-under=80 -q

@@ -9,8 +9,10 @@ Quick start:
     haymaker deploy my-workload     # deploy
 """
 
+from importlib.metadata import version
+
 from .workload import MyWorkload
 
-__version__ = "0.1.0"
+__version__ = version("haymaker-my-workload")
 
 __all__ = ["MyWorkload"]

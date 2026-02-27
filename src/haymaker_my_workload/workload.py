@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -31,6 +32,13 @@ from agent_haymaker.workloads.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Terminal states where no further lifecycle transitions are allowed
+_TERMINAL_STATES = frozenset({DeploymentStatus.COMPLETED, DeploymentStatus.FAILED})
+# States that can be stopped
+_STOPPABLE_STATES = frozenset({DeploymentStatus.RUNNING, DeploymentStatus.PENDING})
+# Max log lines per deployment to prevent unbounded memory growth
+_MAX_LOG_LINES = 10_000
 
 
 class MyWorkload(WorkloadBase):
@@ -49,7 +57,8 @@ class MyWorkload(WorkloadBase):
 
     def __init__(self, platform=None):
         super().__init__(platform=platform)
-        # In-memory log buffer (replace with your logging backend)
+        # In-memory log buffer (replace with your logging backend).
+        # Capped at _MAX_LOG_LINES per deployment to prevent unbounded growth.
         self._logs: dict[str, list[str]] = {}
 
     # =========================================================================
@@ -68,6 +77,11 @@ class MyWorkload(WorkloadBase):
             3. Start your workload's main loop
             4. Return a unique deployment_id
         """
+        # Validate before deploying
+        errors = await self.validate_config(config)
+        if errors:
+            raise ValueError(f"Invalid config: {'; '.join(errors)}")
+
         deployment_id = f"{self.name}-{uuid.uuid4().hex[:8]}"
 
         # Read workload-specific config with defaults
@@ -131,6 +145,9 @@ class MyWorkload(WorkloadBase):
         state = await self.get_status(deployment_id)
         if state.status == DeploymentStatus.STOPPED:
             return True
+        if state.status not in _STOPPABLE_STATES:
+            self.log(f"Cannot stop deployment in {state.status} state")
+            return False
 
         self._append_log(deployment_id, "Stopping deployment")
 
@@ -162,7 +179,7 @@ class MyWorkload(WorkloadBase):
         deleted = 0
         errors: list[str] = []
         details: list[str] = []
-        start_time = asyncio.get_event_loop().time()
+        start_time = time.monotonic()
 
         # TODO: Delete your resources here. Example:
         # try:
@@ -183,7 +200,7 @@ class MyWorkload(WorkloadBase):
         state.completed_at = datetime.now(tz=UTC)
         await self.save_state(state)
 
-        elapsed = asyncio.get_event_loop().time() - start_time
+        elapsed = time.monotonic() - start_time
         return CleanupReport(
             deployment_id=deployment_id,
             resources_deleted=deleted,
@@ -211,10 +228,18 @@ class MyWorkload(WorkloadBase):
         for line in log_lines[-lines:]:
             yield line
 
-        # If following, poll for new lines
+        # If following, poll for new lines until deployment reaches a terminal state
         if follow:
             seen = len(log_lines)
             while True:
+                state = await self.load_state(deployment_id)
+                if state is None or state.status in _TERMINAL_STATES:
+                    # Yield any remaining lines before exiting
+                    current = self._logs.get(deployment_id, [])
+                    if len(current) > seen:
+                        for line in current[seen:]:
+                            yield line
+                    break
                 current = self._logs.get(deployment_id, [])
                 if len(current) > seen:
                     for line in current[seen:]:
@@ -253,18 +278,21 @@ class MyWorkload(WorkloadBase):
 
         Return a list of error messages. Empty list means valid.
 
-        TODO: Add your validation rules here.
+        TODO: Add your validation rules here. Keep these in sync with
+        the config_schema in workload.yaml.
         """
         errors = []
         wc = config.workload_config
 
         item_count = wc.get("item_count", 10)
-        if not isinstance(item_count, int) or item_count < 1:
+        if isinstance(item_count, bool) or not isinstance(item_count, int) or item_count < 1:
             errors.append("item_count must be a positive integer")
+        elif item_count > 1000:
+            errors.append("item_count must be <= 1000")
 
         interval = wc.get("interval_seconds", 60)
-        if not isinstance(interval, int) or interval < 10:
-            errors.append("interval_seconds must be >= 10")
+        if isinstance(interval, bool) or not isinstance(interval, int) or interval < 10:
+            errors.append("interval_seconds must be an integer >= 10")
 
         mode = wc.get("mode", "normal")
         if mode not in ("normal", "verbose", "dry-run"):
@@ -280,5 +308,8 @@ class MyWorkload(WorkloadBase):
         """Append a timestamped message to the deployment's log buffer."""
         ts = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{ts}] {message}"
-        self._logs.setdefault(deployment_id, []).append(line)
+        buf = self._logs.setdefault(deployment_id, [])
+        buf.append(line)
+        if len(buf) > _MAX_LOG_LINES:
+            del buf[: len(buf) - _MAX_LOG_LINES]
         self.log(message)

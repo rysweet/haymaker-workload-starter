@@ -67,11 +67,12 @@ Replace all instances of `my-workload` / `MyWorkload` / `haymaker_my_workload`:
 | File | What to change |
 |------|---------------|
 | `pyproject.toml` | `name`, entry point key + value, `packages` path |
-| `workload.yaml` | `name`, `package.name`, `package.entrypoint` |
+| `workload.yaml` | `name`, `package.name`, `package.entrypoint`, `config_schema` |
 | `src/haymaker_my_workload/` | Rename the directory |
-| `src/.../workload.py` | `MyWorkload` class name + `name` attribute |
+| `src/.../workload.py` | `MyWorkload` class name, `name` attribute, `validate_config()` rules |
 | `src/.../__init__.py` | Import + `__all__` |
-| `tests/test_workload.py` | Import path |
+| `tests/test_workload.py` | Import path + validation tests |
+| `.env.example` | Credential names (if changed in `workload.yaml`) |
 
 ### Step 2: Define Your Config Schema
 
@@ -204,13 +205,23 @@ async def deploy(self, config):
 
 ## Deployment States
 
-Your workload should transition through these states:
+Your workload transitions through these states:
 
 ```
-PENDING → RUNNING → STOPPED → RUNNING → ...
-                  ↘ CLEANING_UP → COMPLETED
-                  ↘ FAILED
+RUNNING ⇄ STOPPED
+   ↓
+CLEANING_UP → COMPLETED
+   ↓
+FAILED (on error)
 ```
+
+`deploy()` sets the initial state to `RUNNING`. The `stop()` method only works
+on `RUNNING` or `PENDING` deployments. `cleanup()` is destructive and final.
+Logs follow mode automatically exits when the deployment reaches `COMPLETED` or `FAILED`.
+
+> **Note:** The `PENDING` and `FAILED` states are available in the `DeploymentStatus`
+> enum but are not used by the starter template. Add them when your workload has
+> async provisioning (PENDING) or error recovery (FAILED) needs.
 
 ## Testing Your Workload
 

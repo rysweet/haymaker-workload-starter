@@ -1,5 +1,6 @@
 """Tests for MyWorkload lifecycle methods."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -15,7 +16,7 @@ from haymaker_my_workload import MyWorkload
 
 
 def _mock_platform():
-    """Create a mock platform with state storage."""
+    """Create a mock platform with in-memory state storage."""
     platform = MagicMock()
     storage: dict[str, DeploymentState] = {}
 
@@ -91,6 +92,22 @@ class TestDeploy:
         assert deployment_id in workload._logs
         assert len(workload._logs[deployment_id]) >= 2
 
+    async def test_deploy_validates_config(self, workload):
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"item_count": -1},
+        )
+        with pytest.raises(ValueError, match="Invalid config"):
+            await workload.deploy(config)
+
+    async def test_deploy_rejects_invalid_mode(self, workload):
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"mode": "turbo"},
+        )
+        with pytest.raises(ValueError, match="mode"):
+            await workload.deploy(config)
+
 
 class TestGetStatus:
     """Test get_status lifecycle method."""
@@ -137,6 +154,25 @@ class TestStop:
         result = await workload.stop(dep_id)
         assert result is True
 
+    async def test_stop_not_found(self):
+        workload = MyWorkload(platform=_mock_platform())
+        with pytest.raises(DeploymentNotFoundError):
+            await workload.stop("nonexistent")
+
+    async def test_stop_completed_returns_false(self, running_deployment):
+        workload, dep_id = running_deployment
+        await workload.cleanup(dep_id)
+        result = await workload.stop(dep_id)
+        assert result is False
+
+    async def test_stop_failed_returns_false(self, running_deployment):
+        workload, dep_id = running_deployment
+        state = await workload.get_status(dep_id)
+        state.status = DeploymentStatus.FAILED
+        await workload.save_state(state)
+        result = await workload.stop(dep_id)
+        assert result is False
+
 
 class TestCleanup:
     """Test cleanup lifecycle method."""
@@ -169,6 +205,11 @@ class TestCleanup:
         assert dep_id in workload._logs
         await workload.cleanup(dep_id)
         assert dep_id not in workload._logs
+
+    async def test_cleanup_not_found(self):
+        workload = MyWorkload(platform=_mock_platform())
+        with pytest.raises(DeploymentNotFoundError):
+            await workload.cleanup("nonexistent")
 
 
 class TestGetLogs:
@@ -205,6 +246,44 @@ class TestGetLogs:
         async for line in workload.get_logs(dep_id, lines=3):
             lines.append(line)
         assert len(lines) == 3
+
+    async def test_get_logs_follow_yields_new_lines(self, running_deployment):
+        workload, dep_id = running_deployment
+
+        async def produce_then_complete():
+            await asyncio.sleep(0.05)
+            workload._append_log(dep_id, "follow-line-1")
+            await asyncio.sleep(0.05)
+            workload._append_log(dep_id, "follow-line-2")
+            # Set to completed so follow-mode exits
+            state = await workload.get_status(dep_id)
+            state.status = DeploymentStatus.COMPLETED
+            await workload.save_state(state)
+
+        producer = asyncio.create_task(produce_then_complete())
+        received = []
+        async for line in workload.get_logs(dep_id, follow=True):
+            received.append(line)
+        await producer
+        assert any("follow-line-1" in line for line in received)
+        assert any("follow-line-2" in line for line in received)
+
+    async def test_get_logs_follow_exits_on_failed(self, running_deployment):
+        workload, dep_id = running_deployment
+
+        async def mark_failed():
+            await asyncio.sleep(0.05)
+            state = await workload.get_status(dep_id)
+            state.status = DeploymentStatus.FAILED
+            await workload.save_state(state)
+
+        task = asyncio.create_task(mark_failed())
+        lines = []
+        async for line in workload.get_logs(dep_id, follow=True):
+            lines.append(line)
+        await task
+        # Should have exited cleanly
+        assert isinstance(lines, list)
 
 
 class TestStart:
@@ -262,10 +341,58 @@ class TestValidateConfig:
         errors = await workload.validate_config(config)
         assert any("item_count" in e for e in errors)
 
+    async def test_item_count_zero(self, workload):
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"item_count": 0},
+        )
+        errors = await workload.validate_config(config)
+        assert any("item_count" in e for e in errors)
+
+    async def test_item_count_string(self, workload):
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"item_count": "five"},
+        )
+        errors = await workload.validate_config(config)
+        assert any("item_count" in e for e in errors)
+
+    async def test_item_count_bool(self, workload):
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"item_count": True},
+        )
+        errors = await workload.validate_config(config)
+        assert any("item_count" in e for e in errors)
+
+    async def test_item_count_exceeds_max(self, workload):
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"item_count": 1001},
+        )
+        errors = await workload.validate_config(config)
+        assert any("1000" in e for e in errors)
+
+    async def test_item_count_at_max(self, workload):
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"item_count": 1000},
+        )
+        errors = await workload.validate_config(config)
+        assert errors == []
+
     async def test_invalid_interval(self, workload):
         config = DeploymentConfig(
             workload_name="my-workload",
             workload_config={"interval_seconds": 1},
+        )
+        errors = await workload.validate_config(config)
+        assert any("interval_seconds" in e for e in errors)
+
+    async def test_interval_bool(self, workload):
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"interval_seconds": True},
         )
         errors = await workload.validate_config(config)
         assert any("interval_seconds" in e for e in errors)
@@ -298,3 +425,43 @@ class TestListDeployments:
         workload = MyWorkload()
         result = await workload.list_deployments()
         assert result == []
+
+
+class TestMultipleDeployments:
+    """Test concurrent deployment isolation."""
+
+    async def test_deployments_have_separate_state(self):
+        workload = MyWorkload(platform=_mock_platform())
+        config = DeploymentConfig(workload_name="my-workload")
+        id1 = await workload.deploy(config)
+        id2 = await workload.deploy(config)
+        assert id1 != id2
+
+        await workload.stop(id1)
+        state1 = await workload.get_status(id1)
+        state2 = await workload.get_status(id2)
+        assert state1.status == DeploymentStatus.STOPPED
+        assert state2.status == DeploymentStatus.RUNNING
+
+    async def test_deployments_have_separate_logs(self):
+        workload = MyWorkload(platform=_mock_platform())
+        config = DeploymentConfig(workload_name="my-workload")
+        id1 = await workload.deploy(config)
+        id2 = await workload.deploy(config)
+
+        workload._append_log(id1, "only-in-id1")
+        logs1 = [line async for line in workload.get_logs(id1)]
+        logs2 = [line async for line in workload.get_logs(id2)]
+        assert any("only-in-id1" in line for line in logs1)
+        assert not any("only-in-id1" in line for line in logs2)
+
+
+class TestLogBuffer:
+    """Test log buffer behavior."""
+
+    def test_log_buffer_capped(self):
+        workload = MyWorkload(platform=_mock_platform())
+        workload._logs["test"] = []
+        for i in range(15_000):
+            workload._append_log("test", f"line {i}")
+        assert len(workload._logs["test"]) <= 10_000
