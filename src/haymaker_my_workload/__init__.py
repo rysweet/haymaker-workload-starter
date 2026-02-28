@@ -1,12 +1,11 @@
-"""Haymaker My Workload - starter template for Agent Haymaker workloads.
+"""Goal-seeking agent workload for Agent Haymaker.
 
-This package provides a ready-to-customize workload that inherits from
-WorkloadBase and implements all required lifecycle methods.
+Generates and runs autonomous agents from natural language goal prompts
+using the amplihack goal agent generator.
 
 Quick start:
     pip install -e ".[dev]"
-    haymaker workload list          # verify registration
-    haymaker deploy my-workload     # deploy
+    haymaker deploy my-workload --config goal_file=goals/example-data-collector.md
 """
 
 from importlib.metadata import version
