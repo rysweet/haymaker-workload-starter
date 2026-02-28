@@ -1,6 +1,7 @@
 """Tests for the goal-agent workload."""
 
 import asyncio
+import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -187,10 +188,9 @@ class TestStop:
 
 
 class TestStart:
-    async def test_start_returns_false(self):
-        """start() is not supported -- always returns False."""
+    async def test_start_raises_not_implemented(self):
+        """start() is not supported -- raises NotImplementedError."""
         workload = MyWorkload(platform=_mock_platform())
-        # Manually create a stopped deployment in state
         state = DeploymentState(
             deployment_id="test-stopped",
             workload_name="my-workload",
@@ -198,8 +198,14 @@ class TestStart:
             phase="stopped",
         )
         await workload.save_state(state)
-        result = await workload.start("test-stopped")
-        assert result is False
+        with pytest.raises(NotImplementedError, match="Cannot resume deployment"):
+            await workload.start("test-stopped")
+
+    async def test_start_error_includes_deployment_id(self):
+        """The NotImplementedError message includes the deployment ID."""
+        workload = MyWorkload(platform=_mock_platform())
+        with pytest.raises(NotImplementedError, match="test-dep-42"):
+            await workload.start("test-dep-42")
 
 
 class TestCleanup:
@@ -497,3 +503,304 @@ class TestReadLastLine:
         f = tmp_path / "single.log"
         f.write_text("only line\n")
         assert MyWorkload._read_last_line(f) == "only line"
+
+
+class TestExecuteAgentDetached:
+    """Tests for _execute_agent_detached using mocked subprocess.Popen."""
+
+    def test_launches_process_with_main_py(self, tmp_path):
+        """When main.py exists, Popen is called and the process is tracked."""
+        workload = MyWorkload(platform=_mock_platform())
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        (agent_dir / "main.py").write_text("print('hello')\n")
+
+        mock_proc = MagicMock(spec=subprocess.Popen)
+        mock_proc.pid = 12345
+
+        with patch("haymaker_my_workload.workload.subprocess.Popen", return_value=mock_proc):
+            workload._execute_agent_detached("dep-1", agent_dir, max_turns=10)
+
+        assert "dep-1" in workload._processes
+        assert workload._processes["dep-1"] is mock_proc
+        assert "dep-1" in workload._agent_log_files
+        assert workload._agent_log_files["dep-1"] == agent_dir / "agent.log"
+
+    def test_raises_when_main_py_missing(self, tmp_path):
+        """When main.py is absent, FileNotFoundError is raised."""
+        workload = MyWorkload(platform=_mock_platform())
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        # No main.py
+
+        with pytest.raises(FileNotFoundError, match="Agent entry point not found"):
+            workload._execute_agent_detached("dep-2", agent_dir, max_turns=5)
+
+    def test_popen_called_with_correct_args(self, tmp_path):
+        """Verify the subprocess.Popen call arguments."""
+        workload = MyWorkload(platform=_mock_platform())
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        (agent_dir / "main.py").write_text("print('hello')\n")
+
+        mock_proc = MagicMock(spec=subprocess.Popen)
+        mock_proc.pid = 99
+
+        with patch(
+            "haymaker_my_workload.workload.subprocess.Popen", return_value=mock_proc
+        ) as mock_popen:
+            workload._execute_agent_detached("dep-3", agent_dir, max_turns=20)
+
+        args, kwargs = mock_popen.call_args
+        assert args[0] == ["python3", str(agent_dir / "main.py")]
+        assert kwargs["cwd"] == str(agent_dir)
+        assert kwargs["start_new_session"] is True
+        assert kwargs["stderr"] == subprocess.STDOUT
+
+
+class TestTerminateProcess:
+    """Tests for _terminate_process with SIGTERM/SIGKILL escalation."""
+
+    def test_sigterm_succeeds(self):
+        """Process terminates cleanly with SIGTERM."""
+        workload = MyWorkload(platform=_mock_platform())
+        mock_proc = MagicMock(spec=subprocess.Popen)
+        mock_proc.poll.return_value = None  # still running
+        mock_proc.wait.return_value = 0  # terminates on SIGTERM
+        workload._processes["dep-term"] = mock_proc
+
+        workload._terminate_process("dep-term")
+
+        mock_proc.terminate.assert_called_once()
+        mock_proc.kill.assert_not_called()
+        assert "dep-term" not in workload._processes
+
+    def test_escalates_to_sigkill(self):
+        """When SIGTERM times out, escalates to SIGKILL."""
+        workload = MyWorkload(platform=_mock_platform())
+        mock_proc = MagicMock(spec=subprocess.Popen)
+        mock_proc.poll.return_value = None  # still running
+        # First wait (after SIGTERM) times out, second wait (after SIGKILL) succeeds
+        mock_proc.wait.side_effect = [subprocess.TimeoutExpired("cmd", 10), 0]
+        workload._processes["dep-kill"] = mock_proc
+
+        workload._terminate_process("dep-kill")
+
+        mock_proc.terminate.assert_called_once()
+        mock_proc.kill.assert_called_once()
+        assert "dep-kill" not in workload._processes
+
+    def test_noop_when_already_exited(self):
+        """No signals sent if process already exited."""
+        workload = MyWorkload(platform=_mock_platform())
+        mock_proc = MagicMock(spec=subprocess.Popen)
+        mock_proc.poll.return_value = 0  # already exited
+        workload._processes["dep-done"] = mock_proc
+
+        workload._terminate_process("dep-done")
+
+        mock_proc.terminate.assert_not_called()
+        mock_proc.kill.assert_not_called()
+        assert "dep-done" not in workload._processes
+
+    def test_closes_log_file_handle(self, tmp_path):
+        """Log file handle is closed during cleanup."""
+        workload = MyWorkload(platform=_mock_platform())
+        mock_proc = MagicMock(spec=subprocess.Popen)
+        mock_proc.poll.return_value = 0  # already exited
+        workload._processes["dep-lf"] = mock_proc
+
+        log_file = tmp_path / "agent.log"
+        lf = open(log_file, "w")
+        workload._log_file_handles["dep-lf"] = lf
+
+        workload._terminate_process("dep-lf")
+
+        assert lf.closed
+        assert "dep-lf" not in workload._log_file_handles
+
+
+class TestDeployRejectsInvalid:
+    """Test that deploy() raises ValueError for various bad configs."""
+
+    @pytest.fixture()
+    def workload(self):
+        return MyWorkload(platform=_mock_platform())
+
+    async def test_rejects_invalid_sdk(self, workload):
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"sdk": "gpt5"},
+        )
+        with pytest.raises(ValueError, match="Invalid config"):
+            await workload.deploy(config)
+
+    async def test_rejects_max_turns_too_high(self, workload):
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"max_turns": 999},
+        )
+        with pytest.raises(ValueError, match="Invalid config"):
+            await workload.deploy(config)
+
+    async def test_rejects_non_bool_enable_memory(self, workload):
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"enable_memory": "true"},
+        )
+        with pytest.raises(ValueError, match="Invalid config"):
+            await workload.deploy(config)
+
+    async def test_rejects_nonexistent_goal_file(self, workload):
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"goal_file": "/does/not/exist.md"},
+        )
+        with pytest.raises(ValueError, match="Invalid config"):
+            await workload.deploy(config)
+
+    async def test_rejects_multiple_errors(self, workload):
+        """Multiple validation errors are reported together."""
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"sdk": "bad", "max_turns": -1, "enable_memory": 42},
+        )
+        with pytest.raises(ValueError, match="Invalid config") as exc_info:
+            await workload.deploy(config)
+        error_msg = str(exc_info.value)
+        assert "sdk" in error_msg
+        assert "max_turns" in error_msg
+        assert "enable_memory" in error_msg
+
+
+class TestValidateConfigEdgeCases:
+    """Additional edge cases for validate_config beyond TestValidateConfig."""
+
+    @pytest.fixture()
+    def workload(self):
+        return MyWorkload(platform=_mock_platform())
+
+    async def test_max_turns_boundary_lower(self, workload):
+        """max_turns=1 is the minimum valid value."""
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"max_turns": 1},
+        )
+        errors = await workload.validate_config(config)
+        assert not any("max_turns" in e for e in errors)
+
+    async def test_max_turns_boundary_upper(self, workload):
+        """max_turns=100 is the maximum valid value."""
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"max_turns": 100},
+        )
+        errors = await workload.validate_config(config)
+        assert not any("max_turns" in e for e in errors)
+
+    async def test_max_turns_above_upper(self, workload):
+        """max_turns=101 exceeds the maximum."""
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"max_turns": 101},
+        )
+        errors = await workload.validate_config(config)
+        assert any("max_turns" in e for e in errors)
+
+    async def test_max_turns_float_rejected(self, workload):
+        """max_turns must be an int, not a float."""
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"max_turns": 10.5},
+        )
+        errors = await workload.validate_config(config)
+        assert any("max_turns" in e for e in errors)
+
+    async def test_max_turns_string_rejected(self, workload):
+        """max_turns must be an int, not a string."""
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"max_turns": "ten"},
+        )
+        errors = await workload.validate_config(config)
+        assert any("max_turns" in e for e in errors)
+
+    async def test_enable_memory_true_valid(self, workload):
+        """enable_memory=True is valid."""
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"enable_memory": True},
+        )
+        errors = await workload.validate_config(config)
+        assert not any("enable_memory" in e for e in errors)
+
+    async def test_enable_memory_false_valid(self, workload):
+        """enable_memory=False is valid."""
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"enable_memory": False},
+        )
+        errors = await workload.validate_config(config)
+        assert not any("enable_memory" in e for e in errors)
+
+    async def test_enable_memory_int_rejected(self, workload):
+        """enable_memory=1 is not a bool."""
+        config = DeploymentConfig(
+            workload_name="my-workload",
+            workload_config={"enable_memory": 1},
+        )
+        errors = await workload.validate_config(config)
+        assert any("enable_memory" in e for e in errors)
+
+    async def test_all_valid_sdks_accepted(self, workload):
+        """Each SDK in the valid set passes validation."""
+        for sdk in ("claude", "copilot", "microsoft", "mini"):
+            config = DeploymentConfig(
+                workload_name="my-workload",
+                workload_config={"sdk": sdk},
+            )
+            errors = await workload.validate_config(config)
+            assert not any("sdk" in e for e in errors), f"SDK '{sdk}' should be valid"
+
+    async def test_empty_config_valid(self, workload):
+        """A config with no workload_config fields is valid (uses defaults)."""
+        config = DeploymentConfig(workload_name="my-workload")
+        errors = await workload.validate_config(config)
+        assert errors == []
+
+
+@pytest.mark.integration
+class TestGeneratorIntegration:
+    """Integration tests that exercise the real amplihack generator pipeline.
+
+    These tests require the amplihack package to be installed and functional.
+    Run with: pytest -m integration
+    """
+
+    async def test_generate_agent_produces_runnable_bundle(self, tmp_path):
+        """End-to-end: generate an agent from a goal file, verify main.py exists."""
+        goal_file = tmp_path / "goal.md"
+        goal_file.write_text(
+            "# Integration Test Goal\n\n"
+            "## Goal\n"
+            "Process a list of three numbers and compute their sum.\n\n"
+            "## Constraints\n"
+            "- Complete within 1 minute\n"
+            "- No external API calls\n\n"
+            "## Success Criteria\n"
+            "- Sum is computed correctly\n"
+        )
+
+        workload = MyWorkload(platform=_mock_platform())
+        agent_dir = await workload._generate_agent(
+            deployment_id="integ-test-001",
+            goal_path=goal_file,
+            sdk="claude",
+            enable_memory=False,
+        )
+
+        assert agent_dir.exists(), f"Agent directory was not created: {agent_dir}"
+        main_py = agent_dir / "main.py"
+        assert main_py.exists(), "Generated agent must contain main.py"
+        content = main_py.read_text()
+        assert len(content) > 0, "main.py should not be empty"

@@ -217,11 +217,10 @@ class MyWorkload(WorkloadBase):
 
     async def start(self, deployment_id: str) -> bool:
         """Resume is not supported -- stopped agents cannot be restarted."""
-        self.log(
+        raise NotImplementedError(
             f"Cannot resume deployment {deployment_id}. "
             "Stopped agents cannot be restarted. Deploy a new one instead."
         )
-        return False
 
     async def cleanup(self, deployment_id: str) -> CleanupReport:
         state = await self.get_status(deployment_id)
