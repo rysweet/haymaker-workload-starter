@@ -26,7 +26,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install "agent-haymaker @ git+https://github.com/rysweet/agent-haymaker.git"
           pip install "amplihack @ git+https://github.com/rysweet/amplihack.git"
-          pip install -e ".[dev]"
+          pip install --no-deps -e .
+          pip install pytest pytest-asyncio pytest-cov ruff
 
       - name: Lint with ruff
         run: |

@@ -62,7 +62,7 @@ The workflow runs three jobs:
 |----------|-----|------|
 | Container Registry | Basic | ~$5/mo |
 | Container Apps Environment | Consumption | ~$0 when idle |
-| Container App | 0.25 vCPU, 0.5GB | Pennies per hour |
+| Container App | 2 vCPU, 4 GiB | ~$0.10/hr when active |
 | Log Analytics | Per-GB | ~$0 at this scale |
 
 ## E2E verification

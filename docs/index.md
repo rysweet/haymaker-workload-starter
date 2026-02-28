@@ -21,12 +21,12 @@ permalink: /
     <div class="stat-label">To First Deploy</div>
   </div>
   <div class="stat">
-    <div class="stat-value">3</div>
-    <div class="stat-label">LLM Providers</div>
+    <div class="stat-value">4</div>
+    <div class="stat-label">Agent SDKs</div>
   </div>
   <div class="stat">
-    <div class="stat-value">97%</div>
-    <div class="stat-label">Test Coverage</div>
+    <div class="stat-value">12</div>
+    <div class="stat-label">Unit Tests</div>
   </div>
   <div class="stat">
     <div class="stat-value">OIDC</div>

@@ -15,12 +15,17 @@ Configuration:
 
 from __future__ import annotations
 
+import atexit
 import logging
+import subprocess
+import tempfile
 import time
 import uuid
+from collections import deque
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import IO
 
 from agent_haymaker.workloads.base import (
     DeploymentNotFoundError,
@@ -38,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 _TERMINAL_STATES = frozenset({DeploymentStatus.COMPLETED, DeploymentStatus.FAILED})
 _MAX_LOG_LINES = 10_000
+_VALID_SDKS = ("claude", "copilot", "microsoft", "mini")
 _DEFAULT_GOAL = """\
 # Default Goal
 
@@ -72,8 +78,11 @@ class MyWorkload(WorkloadBase):
     def __init__(self, platform: Platform | None = None) -> None:
         super().__init__(platform=platform)
         self._logs: dict[str, list[str]] = {}
-        self._processes: dict[str, object] = {}  # subprocess.Popen instances
-        self._agent_log_files: dict[str, Path] = {}  # deployment_id -> log file
+        self._processes: dict[str, subprocess.Popen] = {}
+        self._agent_log_files: dict[str, Path] = {}
+        self._log_file_handles: dict[str, IO] = {}
+        self._temp_goal_files: dict[str, Path] = {}
+        atexit.register(self._kill_all_processes)
 
     async def deploy(self, config: DeploymentConfig) -> str:
         """Generate an agent from a goal prompt and execute it."""
@@ -88,16 +97,16 @@ class MyWorkload(WorkloadBase):
 
         # Resolve or create goal file
         if goal_file:
-            goal_path = Path(goal_file)
-            if not goal_path.is_absolute():
-                goal_path = Path.cwd() / goal_path
-            if not goal_path.exists():
-                raise ValueError(f"Goal file not found: {goal_path}")
+            goal_path = self._resolve_goal_path(goal_file)
             self._append_log(deployment_id, f"Using goal: {goal_path}")
         else:
-            # Use default goal if none specified
-            goal_path = Path(f"/tmp/haymaker-{deployment_id}-goal.md")
-            goal_path.write_text(_DEFAULT_GOAL)
+            fd, tmp_path = tempfile.mkstemp(prefix=f"haymaker-{deployment_id}-", suffix=".md")
+            goal_path = Path(tmp_path)
+            import os
+
+            with os.fdopen(fd, "w") as f:
+                f.write(_DEFAULT_GOAL)
+            self._temp_goal_files[deployment_id] = goal_path
             self._append_log(deployment_id, "Using default goal (no goal_file specified)")
 
         # Generate the agent
@@ -110,7 +119,7 @@ class MyWorkload(WorkloadBase):
         )
         self._append_log(deployment_id, f"Agent generated in {agent_dir}")
 
-        # Read goal definition for metadata
+        # Read goal for metadata
         goal_text = goal_path.read_text()
         goal_summary = goal_text.split("\n")[0].strip("# ").strip() or "Goal agent"
 
@@ -131,7 +140,6 @@ class MyWorkload(WorkloadBase):
         )
         await self.save_state(state)
 
-        # Execute agent in background
         # Launch agent as detached subprocess (returns immediately)
         self._execute_agent_detached(deployment_id, agent_dir, max_turns)
 
@@ -147,7 +155,7 @@ class MyWorkload(WorkloadBase):
         if proc and state.status == DeploymentStatus.RUNNING:
             rc = proc.poll()
             if rc is not None:
-                self._processes.pop(deployment_id, None)
+                self._cleanup_process(deployment_id)
                 if rc == 0:
                     state.status = DeploymentStatus.COMPLETED
                     state.phase = "completed"
@@ -167,11 +175,8 @@ class MyWorkload(WorkloadBase):
         if state.status not in (DeploymentStatus.RUNNING, DeploymentStatus.PENDING):
             return False
 
-        # Kill the agent process if running
-        proc = self._processes.pop(deployment_id, None)
-        if proc and proc.poll() is None:
-            proc.terminate()
-            self._append_log(deployment_id, "Agent process terminated")
+        self._terminate_process(deployment_id)
+        self._append_log(deployment_id, "Agent process terminated")
 
         state.status = DeploymentStatus.STOPPED
         state.phase = "stopped"
@@ -180,14 +185,12 @@ class MyWorkload(WorkloadBase):
         return True
 
     async def start(self, deployment_id: str) -> bool:
-        state = await self.get_status(deployment_id)
-        if state.status != DeploymentStatus.STOPPED:
-            return False
-        state.status = DeploymentStatus.RUNNING
-        state.phase = "running"
-        state.stopped_at = None
-        await self.save_state(state)
-        return True
+        """Resume is not supported -- stopped agents cannot be restarted."""
+        self.log(
+            f"Cannot resume deployment {deployment_id}. "
+            "Stopped agents cannot be restarted. Deploy a new one instead."
+        )
+        return False
 
     async def cleanup(self, deployment_id: str) -> CleanupReport:
         state = await self.get_status(deployment_id)
@@ -199,12 +202,13 @@ class MyWorkload(WorkloadBase):
 
         start_time = time.monotonic()
 
-        # Kill process if still running
-        proc = self._processes.pop(deployment_id, None)
-        if proc and proc.poll() is None:
-            proc.terminate()
-
+        self._terminate_process(deployment_id)
         self._logs.pop(deployment_id, None)
+
+        # Clean up temp goal file
+        temp_file = self._temp_goal_files.pop(deployment_id, None)
+        if temp_file and temp_file.exists():
+            temp_file.unlink()
 
         state.status = DeploymentStatus.COMPLETED
         state.phase = "cleaned_up"
@@ -227,30 +231,64 @@ class MyWorkload(WorkloadBase):
         for line in self._logs.get(deployment_id, [])[-lines:]:
             yield line
 
-        # Also yield from agent log file if it exists
+        # Also yield from agent log file (efficient tail)
         log_file = self._agent_log_files.get(deployment_id)
         if log_file and log_file.exists():
             with open(log_file) as f:
-                file_lines = f.readlines()
-            for line in file_lines[-lines:]:
+                tail = deque(f, maxlen=lines)
+            for line in tail:
                 yield line.rstrip()
 
     async def validate_config(self, config: DeploymentConfig) -> list[str]:
         errors = []
         wc = config.workload_config
+
         goal_file = wc.get("goal_file")
         if goal_file:
-            p = Path(goal_file)
-            if not p.is_absolute():
-                p = Path.cwd() / p
-            if not p.exists():
-                errors.append(f"goal_file not found: {p}")
+            try:
+                self._resolve_goal_path(goal_file)
+            except ValueError as e:
+                errors.append(str(e))
+
         sdk = wc.get("sdk", "claude")
-        if sdk not in ("claude", "copilot", "microsoft", "mini"):
-            errors.append(f"sdk must be one of: claude, copilot, microsoft, mini (got '{sdk}')")
+        if sdk not in _VALID_SDKS:
+            errors.append(f"sdk must be one of: {', '.join(_VALID_SDKS)} (got '{sdk}')")
+
+        max_turns = wc.get("max_turns", 15)
+        if not isinstance(max_turns, int) or max_turns < 1 or max_turns > 100:
+            errors.append("max_turns must be an integer between 1 and 100")
+
+        enable_memory = wc.get("enable_memory", False)
+        if not isinstance(enable_memory, bool):
+            errors.append("enable_memory must be a boolean (true/false)")
+
         return errors
 
     # -- Internal methods --
+
+    @staticmethod
+    def _resolve_goal_path(goal_file: str) -> Path:
+        """Resolve and validate a goal file path.
+
+        Prevents path traversal via '..' components while allowing
+        both relative and absolute paths to markdown files.
+        """
+        # Reject traversal attempts before resolving
+        if ".." in Path(goal_file).parts:
+            raise ValueError(f"goal_file must not contain '..': {goal_file}")
+
+        goal_path = Path(goal_file)
+        if not goal_path.is_absolute():
+            goal_path = Path.cwd() / goal_path
+        goal_path = goal_path.resolve()
+
+        if not goal_path.exists():
+            raise ValueError(f"goal_file not found: {goal_path}")
+
+        if goal_path.suffix not in (".md", ".markdown", ".txt"):
+            raise ValueError(f"goal_file must be a markdown file (.md): {goal_path}")
+
+        return goal_path
 
     async def _generate_agent(
         self,
@@ -310,38 +348,59 @@ class MyWorkload(WorkloadBase):
         return agent_dir
 
     def _execute_agent_detached(self, deployment_id: str, agent_dir: Path, max_turns: int) -> None:
-        """Launch the agent as a detached subprocess (fire-and-forget).
-
-        Uses subprocess.Popen instead of asyncio so the agent runs
-        independently of the event loop. Logs go to a file that
-        get_logs() reads. A wrapper script updates deployment state
-        when the agent finishes.
-        """
-        import subprocess
-
+        """Launch the agent as a detached subprocess (fire-and-forget)."""
         main_py = agent_dir / "main.py"
         if not main_py.exists():
             self._append_log(deployment_id, f"ERROR: {main_py} not found")
-            return
+            raise FileNotFoundError(f"Agent entry point not found: {main_py}")
 
         log_file = agent_dir / "agent.log"
         self._append_log(deployment_id, f"Executing agent (max_turns={max_turns})")
         self._append_log(deployment_id, f"Agent log: {log_file}")
 
-        # Store log file path for get_logs() to read
         self._agent_log_files[deployment_id] = log_file
 
-        # Launch detached -- don't wait for completion
-        with open(log_file, "w") as lf:
-            proc = subprocess.Popen(
-                ["python3", str(main_py)],
-                stdout=lf,
-                stderr=subprocess.STDOUT,
-                cwd=str(agent_dir),
-                start_new_session=True,  # Fully detach from parent
-            )
+        # Open log file WITHOUT context manager -- Popen needs it to stay open.
+        # Closed explicitly in _cleanup_process().
+        lf = open(log_file, "w")  # noqa: SIM115
+        self._log_file_handles[deployment_id] = lf
+
+        proc = subprocess.Popen(
+            ["python3", str(main_py)],
+            stdout=lf,
+            stderr=subprocess.STDOUT,
+            cwd=str(agent_dir),
+            start_new_session=True,
+        )
         self._processes[deployment_id] = proc
         self._append_log(deployment_id, f"Agent started (pid={proc.pid})")
+
+    def _terminate_process(self, deployment_id: str) -> None:
+        """Terminate a process with SIGTERM, escalate to SIGKILL if needed."""
+        proc = self._processes.get(deployment_id)
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+        self._cleanup_process(deployment_id)
+
+    def _cleanup_process(self, deployment_id: str) -> None:
+        """Clean up process tracking and close log file handle."""
+        self._processes.pop(deployment_id, None)
+        lf = self._log_file_handles.pop(deployment_id, None)
+        if lf and not lf.closed:
+            lf.close()
+
+    def _kill_all_processes(self) -> None:
+        """atexit handler: terminate all tracked agent processes."""
+        for dep_id in list(self._processes.keys()):
+            try:
+                self._terminate_process(dep_id)
+            except Exception:
+                pass
 
     def _append_log(self, deployment_id: str, message: str) -> None:
         ts = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
