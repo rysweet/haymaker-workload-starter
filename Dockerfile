@@ -15,7 +15,8 @@ RUN pip install --no-cache-dir "agent-haymaker @ git+https://github.com/rysweet/
 
 # Install this workload
 COPY . .
-RUN pip install --no-cache-dir .
+# --no-deps because deps were installed above from GitHub (not on PyPI)
+RUN pip install --no-cache-dir --no-deps .
 
 # Include E2E test script (used by CI to verify the deployment)
 COPY scripts/e2e-test.sh /usr/local/bin/haymaker-e2e-test
