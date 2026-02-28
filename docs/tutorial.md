@@ -390,13 +390,43 @@ ALL E2E TESTS PASSED                   ✅
 
 ---
 
+## Agent memory
+
+Agents store experiences in a [Kuzu](https://kuzudb.com/) graph database at `~/.amplihack/agent-memory/`. Memory is **enabled by default**.
+
+What gets stored at each phase:
+
+| Phase | What's stored | Experience type |
+|-------|--------------|----------------|
+| Session start | Goal prompt | INSIGHT |
+| Turn 1 | Clarified objective | INSIGHT |
+| Turn 2 | Execution plan | PATTERN |
+| Turns 3+ | Execution output per turn | SUCCESS |
+| Turns 3+ | Evaluation per turn | INSIGHT |
+| Session end | Summary and learnings | INSIGHT |
+
+On subsequent runs, the agent recalls relevant past experiences before executing, building domain knowledge over time. This means an agent that runs the same goal twice will benefit from what it learned the first time.
+
+To disable memory:
+
+```bash
+haymaker deploy my-workload \
+  --config goal_file=goals/my-goal.md \
+  --config enable_memory=false \
+  --yes
+```
+
+Requires `amplihack-memory-lib` (`pip install amplihack-memory-lib`).
+
+---
+
 ## Configuration reference
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `goal_file` | built-in default | Path to goal markdown |
 | `sdk` | `claude` | `claude`, `copilot`, `microsoft`, or `mini` |
-| `enable_memory` | `false` | Agent learns across runs |
+| `enable_memory` | `true` | Store/recall experiences across runs (Kuzu graph DB) |
 | `max_turns` | `15` | Maximum agentic iterations |
 
 ## Lifecycle commands
