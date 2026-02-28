@@ -1,0 +1,38 @@
+title: Haymaker Workload Starter
+description: Build custom Agent Haymaker workloads with goal-seeking agents
+url: https://rysweet.github.io
+baseurl: /haymaker-workload-starter
+
+remote_theme: just-the-docs/just-the-docs@v0.10.0
+
+color_scheme: dark
+
+search_enabled: true
+search.button: true
+
+heading_anchors: true
+
+callouts:
+  note:
+    title: Note
+    color: blue
+  warning:
+    title: Warning
+    color: red
+  tip:
+    title: Tip
+    color: green
+
+aux_links:
+  "GitHub":
+    - "https://github.com/rysweet/haymaker-workload-starter"
+
+footer_content: "Built for the <a href=\"https://github.com/rysweet/agent-haymaker\">Agent Haymaker</a> platform."
+
+plugins:
+  - jekyll-seo-tag
+
+exclude:
+  - Gemfile.lock
+  - node_modules
+  - vendor
