@@ -97,13 +97,17 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'workload'
           image: image
           resources: {
-            cpu: json('0.25')
-            memory: '0.5Gi'
+            cpu: json('4')
+            memory: '8Gi'
           }
           env: [
             {
               name: 'ANTHROPIC_API_KEY'
               secretRef: 'anthropic-api-key'
+            }
+            {
+              name: 'CLAUDECODE'
+              value: ''
             }
           ]
         }

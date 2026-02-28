@@ -183,10 +183,10 @@ jobs:
             --trigger-type Manual \
             --replica-timeout 600 \
             --replica-retry-limit 0 \
-            --cpu 0.25 --memory 0.5Gi \
+            --cpu 4 --memory 8Gi \
             --parallelism 1 \
             --replica-completion-count 1 \
-            --env-vars "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" \
+            --env-vars "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" "CLAUDECODE=" \
             --command "haymaker-e2e-test" \
             -o none
 
