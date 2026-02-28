@@ -1,38 +1,87 @@
 title: Haymaker Workload Starter
-description: Build custom Agent Haymaker workloads with goal-seeking agents
-url: https://rysweet.github.io
-baseurl: /haymaker-workload-starter
+description: >-
+  Build custom AI agent workloads for the Agent Haymaker platform.
+  Goal-seeking agents with optional LLM enhancement.
+baseurl: "/haymaker-workload-starter"
+url: "https://rysweet.github.io"
 
 remote_theme: just-the-docs/just-the-docs@v0.10.0
 
-color_scheme: dark
+color_scheme: light
+
+color_scheme_toggle:
+  - light
+  - dark
 
 search_enabled: true
-search.button: true
+search:
+  heading_level: 2
+  previews: 3
+  preview_words_before: 5
+  preview_words_after: 10
+  button: true
 
 heading_anchors: true
+back_to_top: true
+back_to_top_text: "Back to top"
 
+enable_copy_code_button: true
+
+last_edit_timestamp: true
+last_edit_time_format: "%b %e %Y"
+
+callouts_level: quiet
 callouts:
+  highlight:
+    color: yellow
+  important:
+    title: Important
+    color: blue
+  new:
+    title: New
+    color: green
   note:
     title: Note
-    color: blue
+    color: purple
   warning:
     title: Warning
     color: red
-  tip:
-    title: Tip
-    color: green
 
 aux_links:
-  "GitHub":
-    - "https://github.com/rysweet/haymaker-workload-starter"
+  "GitHub": "https://github.com/rysweet/haymaker-workload-starter"
 
-footer_content: "Built for the <a href=\"https://github.com/rysweet/agent-haymaker\">Agent Haymaker</a> platform."
+aux_links_new_tab: true
+
+nav_sort: case_insensitive
+
+footer_content: >-
+  Built for the <a href="https://github.com/rysweet/agent-haymaker">Agent Haymaker</a> platform.
+  &bull;
+  <a href="https://github.com/rysweet/haymaker-workload-starter">Source</a>
+
+markdown: kramdown
+kramdown:
+  syntax_highlighter: rouge
+  syntax_highlighter_opts:
+    block:
+      line_numbers: false
+
+mermaid:
+  version: "10.6.0"
 
 plugins:
   - jekyll-seo-tag
+
+repository: rysweet/haymaker-workload-starter
 
 exclude:
   - Gemfile.lock
   - node_modules
   - vendor
+
+defaults:
+  - scope:
+      path: ""
+      type: "pages"
+    values:
+      layout: "default"

@@ -2,52 +2,105 @@
 layout: default
 title: Home
 nav_order: 1
+description: "Build custom AI agent workloads for the Agent Haymaker platform"
+permalink: /
 ---
 
-# Haymaker Workload Starter
+<div class="hero" markdown="0">
+  <h1>Haymaker Workload Starter</h1>
+  <p>Build goal-seeking AI agent workloads that deploy, execute, and manage themselves through the haymaker CLI.</p>
+  <div class="hero-buttons">
+    <a href="/haymaker-workload-starter/tutorial" class="btn btn-primary">Build Your First Agent</a>
+    <a href="https://github.com/rysweet/haymaker-workload-starter" class="btn btn-secondary">View on GitHub</a>
+  </div>
+</div>
 
-A starter template for building custom [Agent Haymaker](https://github.com/rysweet/agent-haymaker) workloads with goal-seeking agents.
+<div class="stats fade-in" markdown="0">
+  <div class="stat">
+    <div class="stat-value">5 min</div>
+    <div class="stat-label">To First Deploy</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">3</div>
+    <div class="stat-label">LLM Providers</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">97%</div>
+    <div class="stat-label">Test Coverage</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">OIDC</div>
+    <div class="stat-label">Azure Auth</div>
+  </div>
+</div>
 
 ---
 
 ## What is this?
 
-Agent Haymaker is a platform for deploying and managing AI agent workloads. This repo is a **starter template** you clone and customize to build your own workload type.
+Agent Haymaker is a platform for deploying AI agent workloads that pursue goals autonomously. This repo is a **starter template** -- clone it, build your agent, and deploy to Azure.
 
-The platform provides universal CLI commands that work with any workload:
-
-```bash
-haymaker deploy my-workload     # start
-haymaker status <id>            # check state
-haymaker logs <id> --follow     # stream logs
-haymaker stop <id>              # pause
-haymaker start <id>             # resume
-haymaker cleanup <id>           # tear down
-```
-
-## Get started
-
-{: .note }
-New to Agent Haymaker? Start with the tutorial.
-
-| Guide | Description |
-|-------|-------------|
-| [Tutorial: Build a Goal-Seeking Agent](tutorial) | Step-by-step guide to building a data-collector agent with optional LLM enhancement |
-| [Architecture](architecture) | How workloads, agents, and the platform fit together |
-| [Deploy to Azure](deploy) | OIDC-authenticated deployment to Azure Container Apps |
-
-## Quick start
+Your agent plugs into a universal CLI that handles the full lifecycle:
 
 ```bash
-git clone https://github.com/rysweet/haymaker-workload-starter my-workload
-cd my-workload
-pip install -e ".[dev]"
-haymaker workload list
-pytest -q
+haymaker deploy data-collector     # start your agent
+haymaker status <id>               # check progress toward goals
+haymaker logs <id> --follow        # watch the agent work
+haymaker stop <id>                 # pause execution
+haymaker cleanup <id>              # tear down everything
 ```
 
-## Links
+<div class="feature-grid" markdown="0">
+  <div class="feature-card">
+    <span class="feature-icon">🎯</span>
+    <h3>Goal-Seeking Agents</h3>
+    <p>Define a goal, implement phases, let the agent execute. Status callbacks keep the platform informed.</p>
+  </div>
+  <div class="feature-card">
+    <span class="feature-icon">🧠</span>
+    <h3>Optional LLM Enhancement</h3>
+    <p>Add Claude, Azure OpenAI, or AI Foundry for adaptive error recovery and intelligent goal evaluation.</p>
+  </div>
+  <div class="feature-card">
+    <span class="feature-icon">🔌</span>
+    <h3>Plugin Architecture</h3>
+    <p>Python entry points for zero-config discovery. Install any workload and the CLI picks it up automatically.</p>
+  </div>
+  <div class="feature-card">
+    <span class="feature-icon">☁️</span>
+    <h3>Azure Deploy Pipeline</h3>
+    <p>OIDC-authenticated GitHub Actions workflow deploys to Container Apps and runs full E2E verification.</p>
+  </div>
+</div>
 
-- [Agent Haymaker Platform](https://github.com/rysweet/agent-haymaker)
-- [Azure Infrastructure Workload](https://github.com/rysweet/haymaker-azure-workloads) (example)
-- [M365 Knowledge Worker Workload](https://github.com/rysweet/haymaker-m365-workloads) (example)
+---
+
+## Documentation
+
+<div class="quick-links" markdown="0">
+  <a href="/haymaker-workload-starter/tutorial" class="quick-link">
+    <span class="icon">📚</span>
+    <span>Tutorial</span>
+  </a>
+  <a href="/haymaker-workload-starter/architecture" class="quick-link">
+    <span class="icon">🏗️</span>
+    <span>Architecture</span>
+  </a>
+  <a href="/haymaker-workload-starter/deploy" class="quick-link">
+    <span class="icon">☁️</span>
+    <span>Deploy to Azure</span>
+  </a>
+  <a href="https://github.com/rysweet/agent-haymaker" class="quick-link">
+    <span class="icon">⚙️</span>
+    <span>Platform Docs</span>
+  </a>
+</div>
+
+---
+
+## Real workloads built on this pattern
+
+| Workload | What it does | Agent type |
+|----------|-------------|------------|
+| [Azure Infrastructure](https://github.com/rysweet/haymaker-azure-workloads) | Deploys and manages Azure resources across 50+ scenarios | Goal-seeking + LLM error recovery |
+| [M365 Knowledge Worker](https://github.com/rysweet/haymaker-m365-workloads) | Simulates realistic email, Teams, and calendar activity | Activity orchestrator + LLM content generation |
