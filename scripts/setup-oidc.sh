@@ -43,6 +43,14 @@ SP_OUTPUT=$(az ad sp create-for-rbac \
 CLIENT_ID=$(echo "$SP_OUTPUT" | jq -r '.appId')
 echo "    Client ID: $CLIENT_ID"
 
+# Assign User Access Administrator (needed for RBAC role assignments in Bicep)
+echo "==> Assigning User Access Administrator role"
+az role assignment create \
+  --assignee "$CLIENT_ID" \
+  --role "User Access Administrator" \
+  --scopes "/subscriptions/$SUBSCRIPTION_ID" \
+  -o none
+
 # Get the app object ID (needed for federated credentials)
 APP_OBJECT_ID=$(az ad app show --id "$CLIENT_ID" --query id -o tsv)
 
