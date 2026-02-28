@@ -403,11 +403,16 @@ class MyWorkload(WorkloadBase):
         lf = open(log_file, "w")  # noqa: SIM115
         self._log_file_handles[deployment_id] = lf
 
+        # Strip CLAUDECODE env var to prevent "cannot launch inside
+        # another Claude Code session" error in the agent subprocess
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+
         proc = subprocess.Popen(
             ["python3", str(main_py)],
             stdout=lf,
             stderr=subprocess.STDOUT,
             cwd=str(agent_dir),
+            env=env,
             start_new_session=True,
         )
         self._processes[deployment_id] = proc
