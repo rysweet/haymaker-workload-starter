@@ -3,6 +3,9 @@
 # Requires ANTHROPIC_API_KEY in the environment.
 set -e
 
+# Prevent nested Claude Code session detection
+unset CLAUDECODE
+
 echo "=== Haymaker Goal-Agent E2E Test ==="
 
 echo "--- Step 1: workload list ---"
@@ -40,11 +43,12 @@ if [ -z "$DEPLOYMENT_ID" ]; then
   exit 1
 fi
 
-echo "--- Step 4: wait for agent to complete ---"
-for i in $(seq 1 60); do
-  sleep 5
-  STATUS=$(haymaker status "$DEPLOYMENT_ID" 2>&1 | grep "Status:" | awk '{print $2}')
-  PHASE=$(haymaker status "$DEPLOYMENT_ID" 2>&1 | grep "Phase:" | awk '{print $2}')
+echo "--- Step 4: wait for agent to complete (polling every 30s, up to 15 min) ---"
+for i in $(seq 1 30); do
+  sleep 30
+  STATUS_OUTPUT=$(haymaker status "$DEPLOYMENT_ID" 2>&1)
+  STATUS=$(echo "$STATUS_OUTPUT" | grep "Status:" | awk '{print $2}')
+  PHASE=$(echo "$STATUS_OUTPUT" | grep "Phase:" | awk '{print $2}')
   echo "  [$i] status=$STATUS phase=$PHASE"
   if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ]; then
     break
@@ -54,10 +58,20 @@ done
 echo "--- Step 5: show logs ---"
 haymaker logs "$DEPLOYMENT_ID" 2>&1 || true
 
-echo "--- Step 6: final status ---"
+echo "--- Step 6: check for expected output ---"
+AGENT_DIR=$(haymaker status "$DEPLOYMENT_ID" 2>&1 | grep "Directory:" | awk '{print $2}')
+if [ -n "$AGENT_DIR" ] && [ -f "$AGENT_DIR/output/file-report.md" ]; then
+  echo "PASS: output/file-report.md found"
+  echo "--- report preview ---"
+  head -20 "$AGENT_DIR/output/file-report.md" 2>/dev/null || true
+else
+  echo "WARN: output/file-report.md not found (agent_dir=$AGENT_DIR)"
+fi
+
+echo "--- Step 7: final status ---"
 haymaker status "$DEPLOYMENT_ID" 2>&1
 
-echo "--- Step 7: cleanup ---"
+echo "--- Step 8: cleanup ---"
 haymaker cleanup "$DEPLOYMENT_ID" --yes 2>&1 || true
 
 if [ "$STATUS" = "completed" ]; then
