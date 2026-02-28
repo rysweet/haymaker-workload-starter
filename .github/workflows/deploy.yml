@@ -61,8 +61,10 @@ jobs:
             --name "$ACR" \
             --resource-group "$RG_NAME" \
             --sku Basic \
-            --admin-enabled false \
+            --admin-enabled true \
             2>/dev/null || true
+          # Ensure admin is enabled (idempotent)
+          az acr update --name "$ACR" --admin-enabled true -o none 2>/dev/null || true
           echo "acr_name=$ACR" >> "$GITHUB_OUTPUT"
 
       - name: Build and push image
