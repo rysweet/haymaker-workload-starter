@@ -14,6 +14,10 @@ RUN pip install --no-cache-dir "agent-haymaker @ git+https://github.com/rysweet/
 COPY . .
 RUN pip install --no-cache-dir .
 
+# Include E2E test script (used by CI to verify the deployment)
+COPY scripts/e2e-test.sh /usr/local/bin/haymaker-e2e-test
+RUN chmod +x /usr/local/bin/haymaker-e2e-test
+
 # Verify the workload is registered
 RUN haymaker workload list
 
