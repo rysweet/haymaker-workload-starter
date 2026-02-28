@@ -46,8 +46,9 @@ fi
 echo "--- Step 4: wait for agent to complete (polling every 30s, up to 15 min) ---"
 for i in $(seq 1 30); do
   sleep 30
-  STATUS=$(haymaker status "$DEPLOYMENT_ID" 2>&1 | grep "Status:" | awk '{print $2}')
-  PHASE=$(haymaker status "$DEPLOYMENT_ID" 2>&1 | grep "Phase:" | awk '{print $2}')
+  STATUS_OUTPUT=$(haymaker status "$DEPLOYMENT_ID" 2>&1)
+  STATUS=$(echo "$STATUS_OUTPUT" | grep "Status:" | awk '{print $2}')
+  PHASE=$(echo "$STATUS_OUTPUT" | grep "Phase:" | awk '{print $2}')
   echo "  [$i] status=$STATUS phase=$PHASE"
   if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ]; then
     break
