@@ -400,17 +400,21 @@ class MyWorkload(WorkloadBase):
 
         # Open log file WITHOUT context manager -- Popen needs it to stay open.
         # Closed explicitly in _cleanup_process().
-        lf = open(log_file, "w")  # noqa: SIM115
+        lf = open(log_file, "w", buffering=1)  # noqa: SIM115  # line-buffered
         self._log_file_handles[deployment_id] = lf
 
         # Strip CLAUDECODE env var to prevent "cannot launch inside
         # another Claude Code session" error in the agent subprocess
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
+        # Also capture stderr to a separate file for debugging
+        err_file = agent_dir / "agent.err"
+        ef = open(err_file, "w", buffering=1)  # noqa: SIM115
+
         proc = subprocess.Popen(
-            ["python3", "main.py"],  # Just filename -- cwd is agent_dir
+            ["python3", "-u", "main.py"],  # -u: unbuffered stdout/stderr
             stdout=lf,
-            stderr=subprocess.STDOUT,
+            stderr=ef,
             cwd=str(agent_dir),
             env=env,
             start_new_session=True,
