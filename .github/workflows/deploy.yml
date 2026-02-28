@@ -111,6 +111,7 @@ jobs:
               image="${{ needs.build.outputs.image }}" \
               acrName="${{ needs.build.outputs.acr_name }}" \
               environment="${{ inputs.environment }}" \
+              anthropicApiKey="${{ secrets.ANTHROPIC_API_KEY }}" \
             --query "properties.outputs" \
             -o json)
 
@@ -180,11 +181,12 @@ jobs:
             --registry-username "$ACR_USER" \
             --registry-password "$ACR_PASS" \
             --trigger-type Manual \
-            --replica-timeout 300 \
+            --replica-timeout 600 \
             --replica-retry-limit 0 \
             --cpu 0.25 --memory 0.5Gi \
             --parallelism 1 \
             --replica-completion-count 1 \
+            --env-vars "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" \
             --command "haymaker-e2e-test" \
             -o none
 
@@ -197,7 +199,7 @@ jobs:
 
           # Poll for completion
           echo "==> Waiting for E2E job..."
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             STATUS=$(az containerapp job execution show \
               --name "haymaker-e2e-test" \
               --resource-group "$RG_NAME" \
@@ -207,7 +209,7 @@ jobs:
             if [ "$STATUS" = "Succeeded" ] || [ "$STATUS" = "Failed" ]; then
               break
             fi
-            sleep 5
+            sleep 10
           done
 
           # Show logs

@@ -26,6 +26,10 @@ param acrName string
 @allowed(['dev', 'staging', 'prod'])
 param environment string = 'dev'
 
+@description('Anthropic API key for LLM-powered agents')
+@secure()
+param anthropicApiKey string = ''
+
 // ---------- Naming ----------
 var suffix = uniqueString(resourceGroup().id)
 var logAnalyticsName = 'haymaker-logs-${suffix}'
@@ -74,6 +78,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'acr-password'
           value: acr.listCredentials().passwords[0].value
         }
+        {
+          name: 'anthropic-api-key'
+          value: anthropicApiKey
+        }
       ]
       registries: [
         {
@@ -92,6 +100,12 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json('0.25')
             memory: '0.5Gi'
           }
+          env: [
+            {
+              name: 'ANTHROPIC_API_KEY'
+              secretRef: 'anthropic-api-key'
+            }
+          ]
         }
       ]
       scale: {
