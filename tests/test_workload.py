@@ -552,7 +552,7 @@ class TestExecuteAgentDetached:
             workload._execute_agent_detached("dep-3", agent_dir, max_turns=20)
 
         args, kwargs = mock_popen.call_args
-        assert args[0] == ["python3", str(agent_dir / "main.py")]
+        assert args[0] == ["python3", "main.py"]
         assert kwargs["cwd"] == str(agent_dir)
         assert kwargs["start_new_session"] is True
         assert kwargs["stderr"] == subprocess.STDOUT

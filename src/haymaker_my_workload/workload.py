@@ -408,7 +408,7 @@ class MyWorkload(WorkloadBase):
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
         proc = subprocess.Popen(
-            ["python3", str(main_py)],
+            ["python3", "main.py"],  # Just filename -- cwd is agent_dir
             stdout=lf,
             stderr=subprocess.STDOUT,
             cwd=str(agent_dir),
