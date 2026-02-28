@@ -1,7 +1,7 @@
 title: Haymaker Workload Starter
 description: >-
-  Build custom AI agent workloads for the Agent Haymaker platform.
-  Goal-seeking agents with optional LLM enhancement.
+  Build goal-seeking agent workloads for the Agent Haymaker platform,
+  powered by the amplihack goal agent generator.
 baseurl: "/haymaker-workload-starter"
 url: "https://rysweet.github.io"
 

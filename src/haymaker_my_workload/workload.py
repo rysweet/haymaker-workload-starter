@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import atexit
 import logging
+import os
 import subprocess
 import tempfile
 import time
@@ -86,6 +87,10 @@ class MyWorkload(WorkloadBase):
 
     async def deploy(self, config: DeploymentConfig) -> str:
         """Generate an agent from a goal prompt and execute it."""
+        errors = await self.validate_config(config)
+        if errors:
+            raise ValueError(f"Invalid config: {'; '.join(errors)}")
+
         deployment_id = f"{self.name}-{uuid.uuid4().hex[:8]}"
         goal_file = config.workload_config.get("goal_file")
         sdk = config.workload_config.get("sdk", "claude")
@@ -102,8 +107,6 @@ class MyWorkload(WorkloadBase):
         else:
             fd, tmp_path = tempfile.mkstemp(prefix=f"haymaker-{deployment_id}-", suffix=".md")
             goal_path = Path(tmp_path)
-            import os
-
             with os.fdopen(fd, "w") as f:
                 f.write(_DEFAULT_GOAL)
             self._temp_goal_files[deployment_id] = goal_path
@@ -384,7 +387,10 @@ class MyWorkload(WorkloadBase):
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.wait(timeout=5)
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    logger.warning("Process %s did not exit after SIGKILL", proc.pid)
         self._cleanup_process(deployment_id)
 
     def _cleanup_process(self, deployment_id: str) -> None:
