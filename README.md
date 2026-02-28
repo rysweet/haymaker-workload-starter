@@ -9,6 +9,11 @@ A goal-seeking agent workload for [Agent Haymaker](https://github.com/rysweet/ag
 ```bash
 git clone https://github.com/rysweet/haymaker-workload-starter my-workload
 cd my-workload
+
+# Install dependencies (not yet on PyPI, install from GitHub first)
+pip install "agent-haymaker @ git+https://github.com/rysweet/agent-haymaker.git"
+pip install "amplihack @ git+https://github.com/rysweet/amplihack.git"
+pip install "amplihack-memory-lib @ git+https://github.com/rysweet/amplihack-memory-lib.git"
 pip install -e ".[dev]"
 
 export ANTHROPIC_API_KEY=sk-ant-...  # or configure another SDK
@@ -50,7 +55,8 @@ The workload runs the [amplihack goal agent generator](https://rysweet.github.io
 haymaker-workload-starter/
 ├── goals/                             # Goal prompts (write yours here)
 │   ├── example-data-collector.md
-│   └── example-file-organizer.md
+│   ├── example-file-organizer.md
+│   └── example-with-memory.md
 ├── src/haymaker_my_workload/
 │   ├── __init__.py                    # Public API
 │   └── workload.py                    # Goal-agent runtime
@@ -61,6 +67,7 @@ haymaker-workload-starter/
 ├── scripts/
 │   ├── setup-oidc.sh                  # One-time Azure OIDC setup
 │   └── e2e-test.sh                    # E2E verification script
+├── Makefile                           # Dev shortcuts (make install, test, lint, deploy)
 ├── Dockerfile                         # Container image
 ├── .github/workflows/
 │   ├── ci.yml                         # Lint + test
@@ -98,7 +105,15 @@ haymaker-workload-starter/
 ## Development
 
 ```bash
+# Install dependencies (not yet on PyPI, install from GitHub first)
+pip install "agent-haymaker @ git+https://github.com/rysweet/agent-haymaker.git"
+pip install "amplihack @ git+https://github.com/rysweet/amplihack.git"
+pip install "amplihack-memory-lib @ git+https://github.com/rysweet/amplihack-memory-lib.git"
 pip install -e ".[dev]"
+
+# Or use the Makefile shortcut:
+make install
+
 pytest -q               # 21 tests
 ruff check src/ tests/  # lint
 ```
