@@ -789,13 +789,226 @@ gh workflow run deploy.yml -f environment=dev
 
 ---
 
+## Part 9: Using the Amplihack Goal Agent Generator
+
+<div class="concept-box" markdown="1">
+
+#### From hand-crafted to generated agents
+
+Parts 3-5 taught you to build agents by hand -- you defined phases, wrote the execution loop, and wired everything together manually. That is the right approach when you need full control over agent behavior.
+
+But for many workloads, you can skip most of that work. The [Amplihack Goal Agent Generator](https://rysweet.github.io/amplihack/GOAL_AGENT_GENERATOR_GUIDE/) creates autonomous agents from a **natural language goal description**. Instead of writing `_collect_one_item()`, you write a markdown prompt describing what the agent should accomplish, and the generator produces a complete, executable agent bundle.
+
+</div>
+
+### How the generator works
+
+The generator is a 4-stage pipeline:
+
+```
+prompt.md  →  PromptAnalyzer  →  GoalDefinition
+                                       ↓
+                                 ObjectivePlanner  →  ExecutionPlan (3-5 phases)
+                                       ↓
+                                 SkillSynthesizer  →  matched skills + SDK tools
+                                       ↓
+                                 AgentAssembler    →  GoalAgentBundle
+                                       ↓
+                                 GoalAgentPackager →  runnable agent directory
+```
+
+| Stage | What it does | Output |
+|-------|-------------|--------|
+| **Analyze** | Extracts goal, domain, constraints, success criteria from markdown | `GoalDefinition` |
+| **Plan** | Creates a phased execution plan based on domain templates | `ExecutionPlan` with 3-5 phases |
+| **Synthesize** | Matches skills from a library + injects SDK-native tools | Scored skill matches + tool configs |
+| **Assemble** | Combines everything into an executable bundle | Agent directory with `main.py` |
+
+### Writing a goal prompt
+
+Create a markdown file describing what your agent should do:
+
+```markdown
+# Data Collection Agent
+
+## Goal
+Collect product pricing data from 5 e-commerce APIs, normalize the schema,
+and produce a consolidated JSON report.
+
+## Constraints
+- Rate limit: max 10 requests per second per API
+- Must handle API authentication via environment variables
+- Timeout: complete within 30 minutes
+
+## Success Criteria
+- Data collected from all 5 APIs
+- All records normalized to common schema
+- Report written to output/pricing-report.json
+- No unhandled errors
+```
+
+### Generating the agent (CLI)
+
+```bash
+# Install amplihack if not already available
+pip install amplihack
+
+# Generate the agent
+amplihack new \
+  --file goals/data-collection.md \
+  --name pricing-collector \
+  --sdk claude \
+  --enable-memory \
+  --output ./agents
+```
+
+This produces a complete agent directory:
+
+```
+agents/pricing-collector/
+├── main.py          # Entry point using AutoMode
+├── prompt.md        # Your goal definition
+├── config.json      # Execution plan, SDK config, max_turns
+├── skills/          # Auto-matched skills
+├── README.md        # Usage instructions
+└── logs/            # Runtime traces (populated during execution)
+```
+
+### Generating the agent (Python API)
+
+You can also call the generator from within your workload code:
+
+```python
+from amplihack.goal_agent_generator import (
+    PromptAnalyzer,
+    ObjectivePlanner,
+    SkillSynthesizer,
+    AgentAssembler,
+    GoalAgentPackager,
+)
+from pathlib import Path
+
+# 1. Analyze the goal
+analyzer = PromptAnalyzer()
+goal_def = analyzer.analyze(Path("goals/data-collection.md"))
+# goal_def.goal = "Collect product pricing data..."
+# goal_def.domain = "data-processing"
+# goal_def.complexity = "moderate"
+
+# 2. Create execution plan
+planner = ObjectivePlanner()
+plan = planner.generate_plan(goal_def)
+# plan.phases = [Collection, Transformation, Analysis, Reporting]
+
+# 3. Match skills
+synthesizer = SkillSynthesizer()
+synthesis = synthesizer.synthesize_with_sdk_tools(plan, sdk="claude")
+
+# 4. Assemble + package
+assembler = AgentAssembler()
+bundle = assembler.assemble(
+    goal_def, plan, synthesis["skills"],
+    sdk="claude", enable_memory=True,
+    sdk_tools=synthesis["sdk_tools"],
+)
+
+packager = GoalAgentPackager(output_dir=Path("./agents"))
+agent_dir = packager.package(bundle)
+```
+
+### SDK options
+
+The generator supports four execution SDKs:
+
+| SDK | Best for | Requires |
+|-----|----------|----------|
+| `claude` | General agent tasks, tool use, subagent delegation | `ANTHROPIC_API_KEY` |
+| `copilot` | Development tasks, code generation, git operations | GitHub Copilot access |
+| `microsoft` | Azure workloads, structured workflows, telemetry | Azure AI credentials |
+| `mini` | Lightweight tasks, minimal dependencies | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` |
+
+### Wiring a generated agent into your workload
+
+Here is how your workload's `deploy()` can use the generator instead of a hand-built agent:
+
+```python
+async def deploy(self, config: DeploymentConfig) -> str:
+    deployment_id = f"{self.name}-{uuid.uuid4().hex[:8]}"
+    goal_file = Path(config.workload_config.get("goal_file", "goal.md"))
+    sdk = config.workload_config.get("sdk", "claude")
+
+    # Generate the agent from the goal prompt
+    from amplihack.goal_agent_generator import (
+        PromptAnalyzer, ObjectivePlanner,
+        SkillSynthesizer, AgentAssembler, GoalAgentPackager,
+    )
+
+    goal_def = PromptAnalyzer().analyze(goal_file)
+    plan = ObjectivePlanner().generate_plan(goal_def)
+    synthesis = SkillSynthesizer().synthesize_with_sdk_tools(plan, sdk=sdk)
+    bundle = AgentAssembler().assemble(
+        goal_def, plan, synthesis["skills"],
+        sdk=sdk, sdk_tools=synthesis["sdk_tools"],
+    )
+    agent_dir = GoalAgentPackager(
+        output_dir=Path(f".haymaker/agents/{deployment_id}")
+    ).package(bundle)
+
+    # Persist state
+    state = DeploymentState(
+        deployment_id=deployment_id,
+        workload_name=self.name,
+        status=DeploymentStatus.RUNNING,
+        phase="executing",
+        started_at=datetime.now(tz=UTC),
+        config=config.workload_config,
+        metadata={
+            "goal": goal_def.goal,
+            "domain": goal_def.domain,
+            "phases": len(plan.phases),
+            "agent_dir": str(agent_dir),
+        },
+    )
+    await self.save_state(state)
+
+    # Execute the generated agent in background
+    asyncio.create_task(self._run_generated_agent(agent_dir, deployment_id))
+    return deployment_id
+```
+
+<div class="concept-box" markdown="1">
+
+#### When to use which approach
+
+| Approach | When to use it |
+|----------|---------------|
+| **Hand-built agent** (Parts 3-5) | You need precise control over every phase. Your domain logic is custom and specific. |
+| **Generated agent** (Part 9) | Your goal can be described in natural language. You want the AI to figure out the phases and tools. |
+| **Both** | Hand-build the core agent, use the generator for sub-tasks that benefit from autonomous exploration. |
+
+The Azure Infrastructure Workload uses hand-built agents because it needs precise control over Azure CLI commands. A research or data-collection workload might benefit more from generated agents that can explore and adapt.
+
+</div>
+
+### Further reading
+
+- [Goal Agent Generator Guide](https://rysweet.github.io/amplihack/GOAL_AGENT_GENERATOR_GUIDE/) -- full reference
+- [Amplihack Framework](https://github.com/rysweet/amplihack) -- the underlying platform
+
+---
+
 ## Next steps
 
-You have a working goal-seeking agent. Now customize it:
+You now have two approaches to building workloads:
 
-- **Replace `_collect_one_item`** with real work (API calls, database queries, file processing)
+- **Hand-crafted agents** (Parts 3-5) for full control
+- **Generated agents** (Part 9) for declarative, goal-driven workloads
+
+To go further:
+
+- **Replace `_collect_one_item`** with real API calls, database queries, or file processing
+- **Write goal prompts** and use `amplihack new` to generate agents for your domain
 - **Add error handling** in the LLM agent for your domain-specific failures
-- **Implement `start()`** with checkpoint restoration for long-running agents
-- **Study the production examples**:
-  - [Azure Infrastructure](https://github.com/rysweet/haymaker-azure-workloads) -- agents that deploy and manage Azure resources
-  - [M365 Knowledge Worker](https://github.com/rysweet/haymaker-m365-workloads) -- agents that simulate realistic office worker activity
+- **Study the production workloads**:
+  - [Azure Infrastructure](https://github.com/rysweet/haymaker-azure-workloads) -- goal-seeking agents for Azure resource management
+  - [M365 Knowledge Worker](https://github.com/rysweet/haymaker-m365-workloads) -- activity simulation with LLM content generation

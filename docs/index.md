@@ -58,8 +58,8 @@ haymaker cleanup <id>              # tear down everything
   </div>
   <div class="feature-card">
     <span class="feature-icon">🧠</span>
-    <h3>Optional LLM Enhancement</h3>
-    <p>Add Claude, Azure OpenAI, or AI Foundry for adaptive error recovery and intelligent goal evaluation.</p>
+    <h3>LLM + Agent Generator</h3>
+    <p>Hand-build agents with optional LLM enhancement, or generate them from natural language goals using <a href="https://rysweet.github.io/amplihack/GOAL_AGENT_GENERATOR_GUIDE/">amplihack</a>.</p>
   </div>
   <div class="feature-card">
     <span class="feature-icon">🔌</span>
