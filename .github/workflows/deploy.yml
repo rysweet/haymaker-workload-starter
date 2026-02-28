@@ -185,7 +185,7 @@ jobs:
             --trigger-type Manual \
             --replica-timeout 600 \
             --replica-retry-limit 0 \
-            --cpu 4 --memory 8Gi \
+            --cpu 2 --memory 4Gi \
             --parallelism 1 \
             --replica-completion-count 1 \
             --env-vars "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" "CLAUDECODE=" "AZURE_OPENAI_ENDPOINT=${{ secrets.AZURE_OPENAI_ENDPOINT }}" "AZURE_OPENAI_DEPLOYMENT=${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" "LLM_PROVIDER=anthropic" \
