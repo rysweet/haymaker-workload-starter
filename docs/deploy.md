@@ -71,11 +71,9 @@ The verify job runs the full haymaker lifecycle inside the deployed container:
 
 ```
 haymaker workload list     → workload registered
-haymaker deploy            → agent starts
+haymaker deploy            → agent starts (returns instantly)
 haymaker status <id>       → running
 haymaker logs <id>         → log output
-haymaker stop <id>         → paused
-haymaker start <id>        → resumed
 haymaker cleanup <id>      → torn down
 ```
 
