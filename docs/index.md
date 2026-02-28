@@ -40,14 +40,21 @@ permalink: /
 
 Agent Haymaker is a platform for deploying AI agent workloads that pursue goals autonomously. This repo is a **starter template** -- clone it, build your agent, and deploy to Azure.
 
-Your agent plugs into a universal CLI that handles the full lifecycle:
+Write a goal in markdown. Deploy it. The workload generates and runs the agent automatically:
 
 ```bash
-haymaker deploy data-collector     # start your agent
-haymaker status <id>               # check progress toward goals
+# Write your goal
+echo '# My Agent
+## Goal
+Collect system metrics and produce a report.
+## Success Criteria
+- 10 samples collected
+- Report written to output/' > goals/my-agent.md
+
+# Deploy -- the workload generates + runs the agent
+haymaker deploy my-workload --config goal_file=goals/my-agent.md --yes
 haymaker logs <id> --follow        # watch the agent work
-haymaker stop <id>                 # pause execution
-haymaker cleanup <id>              # tear down everything
+haymaker cleanup <id> --yes        # tear down when done
 ```
 
 <div class="feature-grid" markdown="0">
