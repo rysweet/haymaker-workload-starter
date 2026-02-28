@@ -87,7 +87,11 @@ haymaker cleanup <id> --yes        # tear down when done
 <div class="quick-links" markdown="0">
   <a href="/haymaker-workload-starter/tutorial" class="quick-link">
     <span class="icon">📚</span>
-    <span>Tutorial</span>
+    <span>Tutorial: Deploy an Agent</span>
+  </a>
+  <a href="/haymaker-workload-starter/advanced" class="quick-link">
+    <span class="icon">🔧</span>
+    <span>Advanced: Custom Agents</span>
   </a>
   <a href="/haymaker-workload-starter/architecture" class="quick-link">
     <span class="icon">🏗️</span>
@@ -96,10 +100,6 @@ haymaker cleanup <id> --yes        # tear down when done
   <a href="/haymaker-workload-starter/deploy" class="quick-link">
     <span class="icon">☁️</span>
     <span>Deploy to Azure</span>
-  </a>
-  <a href="https://github.com/rysweet/agent-haymaker" class="quick-link">
-    <span class="icon">⚙️</span>
-    <span>Platform Docs</span>
   </a>
 </div>
 
