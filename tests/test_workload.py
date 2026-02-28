@@ -3,7 +3,7 @@
 import asyncio
 import subprocess
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from agent_haymaker.workloads.base import DeploymentNotFoundError
