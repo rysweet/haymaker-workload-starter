@@ -55,7 +55,7 @@ haymaker-workload-starter/
 │   ├── __init__.py                    # Public API
 │   └── workload.py                    # Goal-agent runtime
 ├── tests/
-│   └── test_workload.py               # 12 tests
+│   └── test_workload.py               # 21 tests
 ├── docs/                              # GitHub Pages docs site
 ├── infra/main.bicep                   # Azure Container Apps (Bicep)
 ├── scripts/
@@ -99,7 +99,7 @@ haymaker-workload-starter/
 
 ```bash
 pip install -e ".[dev]"
-pytest -q               # 12 tests
+pytest -q               # 21 tests
 ruff check src/ tests/  # lint
 ```
 
