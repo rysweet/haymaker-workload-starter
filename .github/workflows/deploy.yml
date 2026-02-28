@@ -158,77 +158,107 @@ jobs:
       - name: Haymaker E2E - full lifecycle
         run: |
           APP="${{ needs.deploy.outputs.app_name }}"
+          ACR="${{ needs.build.outputs.acr_name }}"
+          IMAGE="${ACR}.azurecr.io/haymaker-workload:${{ github.sha }}"
 
-          # Create a test script that runs the full haymaker lifecycle
-          # and deploy it as the container's command via revision update.
-          echo "==> Deploying E2E test revision"
-          az containerapp update \
-            --name "$APP" \
+          # Write the E2E test script
+          cat > /tmp/haymaker-e2e.sh << 'TESTSCRIPT'
+          #!/bin/sh
+          set -e
+          echo "=== Haymaker E2E Test ==="
+
+          echo "--- workload list ---"
+          haymaker workload list
+
+          echo "--- deploy ---"
+          OUTPUT=$(haymaker deploy my-workload --config item_count=5 --yes 2>&1)
+          echo "$OUTPUT"
+          DEPLOYMENT_ID=$(echo "$OUTPUT" | grep -oE 'my-workload-[a-f0-9]+' | head -1)
+          echo "Deployment ID: $DEPLOYMENT_ID"
+
+          echo "--- status ---"
+          haymaker status $DEPLOYMENT_ID
+
+          echo "--- logs ---"
+          haymaker logs $DEPLOYMENT_ID
+
+          echo "--- stop ---"
+          haymaker stop $DEPLOYMENT_ID --yes
+
+          echo "--- start ---"
+          haymaker start $DEPLOYMENT_ID
+
+          echo "--- cleanup ---"
+          haymaker cleanup $DEPLOYMENT_ID --yes
+
+          echo "=== ALL E2E TESTS PASSED ==="
+          TESTSCRIPT
+
+          # Run the test as a one-off container using the same image
+          echo "==> Running E2E test container"
+          az containerapp job create \
+            --name "haymaker-e2e-test" \
             --resource-group "$RG_NAME" \
-            --command "sh" \
-            --args "-c" "
-              set -e
-              echo '=== Haymaker E2E Test ==='
-
-              echo '--- workload list ---'
-              haymaker workload list
-
-              echo '--- deploy ---'
-              OUTPUT=\$(haymaker deploy my-workload --config item_count=5 --yes 2>&1)
-              echo \"\$OUTPUT\"
-              DEPLOYMENT_ID=\$(echo \"\$OUTPUT\" | grep -oE 'my-workload-[a-f0-9]+' | head -1)
-              echo \"Deployment ID: \$DEPLOYMENT_ID\"
-
-              echo '--- status ---'
-              haymaker status \$DEPLOYMENT_ID
-
-              echo '--- logs ---'
-              haymaker logs \$DEPLOYMENT_ID
-
-              echo '--- stop ---'
-              haymaker stop \$DEPLOYMENT_ID --yes
-
-              echo '--- start ---'
-              haymaker start \$DEPLOYMENT_ID
-
-              echo '--- cleanup ---'
-              haymaker cleanup \$DEPLOYMENT_ID --yes
-
-              echo '=== ALL E2E TESTS PASSED ==='
-              # Keep container alive briefly so logs can be captured
-              sleep 10
-            " \
+            --environment "haymaker-env-${{ inputs.environment }}" \
+            --image "$IMAGE" \
+            --registry-server "${ACR}.azurecr.io" \
+            --registry-username "$(az acr credential show --name $ACR --query username -o tsv)" \
+            --registry-password "$(az acr credential show --name $ACR --query 'passwords[0].value' -o tsv)" \
+            --trigger-type Manual \
+            --replica-timeout 120 \
+            --replica-retry-limit 0 \
+            --cpu 0.25 --memory 0.5Gi \
+            --command "sh" "-c" "$(cat /tmp/haymaker-e2e.sh)" \
             -o none 2>&1
 
-          # Wait for the new revision to start
-          echo "==> Waiting for E2E revision to run..."
-          sleep 30
-
-          # Stream container logs to see the test results
-          echo "==> Fetching container logs"
-          az containerapp logs show \
-            --name "$APP" \
+          echo "==> Starting E2E job execution"
+          EXECUTION=$(az containerapp job start \
+            --name "haymaker-e2e-test" \
             --resource-group "$RG_NAME" \
-            --tail 50 \
+            --query name -o tsv 2>&1)
+          echo "Execution: $EXECUTION"
+
+          # Wait for job to complete
+          echo "==> Waiting for E2E job to complete..."
+          for i in $(seq 1 30); do
+            STATUS=$(az containerapp job execution show \
+              --name "haymaker-e2e-test" \
+              --resource-group "$RG_NAME" \
+              --job-execution-name "$EXECUTION" \
+              --query "properties.status" -o tsv 2>/dev/null || echo "Unknown")
+            echo "  Attempt $i: $STATUS"
+            if [ "$STATUS" = "Succeeded" ]; then
+              echo "=== E2E job SUCCEEDED ==="
+              break
+            elif [ "$STATUS" = "Failed" ]; then
+              echo "=== E2E job FAILED ==="
+              break
+            fi
+            sleep 5
+          done
+
+          # Show logs
+          echo "==> E2E job logs:"
+          az containerapp job logs show \
+            --name "haymaker-e2e-test" \
+            --resource-group "$RG_NAME" \
+            --execution "$EXECUTION" \
+            --container "haymaker-e2e-test" \
+            --format text 2>&1 || \
+          az containerapp logs show \
+            --name "haymaker-e2e-test" \
+            --resource-group "$RG_NAME" \
+            --type system \
             --format text 2>&1 || true
 
-          # Check if the test passed by looking for success marker in logs
-          LOGS=$(az containerapp logs show \
-            --name "$APP" \
+          # Clean up the job
+          az containerapp job delete \
+            --name "haymaker-e2e-test" \
             --resource-group "$RG_NAME" \
-            --tail 50 \
-            --format text 2>&1 || true)
-          echo "$LOGS"
+            --yes 2>/dev/null || true
 
-          if echo "$LOGS" | grep -q "ALL E2E TESTS PASSED"; then
-            echo ""
-            echo "=== E2E verification PASSED ==="
-          else
-            echo ""
-            echo "=== E2E verification - checking container status ==="
-            az containerapp show \
-              --name "$APP" \
-              --resource-group "$RG_NAME" \
-              --query "{state: properties.provisioningState, latestRevision: properties.latestRevisionName}" \
-              -o json
+          # Fail if job didn't succeed
+          if [ "$STATUS" != "Succeeded" ]; then
+            echo "E2E test did not succeed (status: $STATUS)"
+            exit 1
           fi
