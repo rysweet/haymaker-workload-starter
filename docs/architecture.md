@@ -24,29 +24,32 @@ How workloads, agents, and the platform fit together.
 ```
 ┌─────────────────────────────────────────────────┐
 │                  haymaker CLI                     │
-│  deploy / status / logs / stop / start / cleanup │
+│  deploy / status / logs / stop / cleanup         │
 └────────────────────┬────────────────────────────┘
                      │
 ┌────────────────────▼────────────────────────────┐
 │              WorkloadBase (ABC)                   │
 │  deploy() / get_status() / stop() / cleanup()    │
-│  get_logs() / start() / validate_config()        │
+│  get_logs() / validate_config()                  │
 └────────────────────┬────────────────────────────┘
                      │
 ┌────────────────────▼────────────────────────────┐
-│           Your Workload (concrete)               │
-│  Creates and manages GoalSeekingAgent instances  │
+│         Goal-Agent Runtime (MyWorkload)          │
+│  Reads goal prompt → runs amplihack pipeline     │
+│  → launches agent as detached subprocess         │
 └────────────────────┬────────────────────────────┘
                      │
 ┌────────────────────▼────────────────────────────┐
-│            GoalSeekingAgent                       │
-│  start() / stop() / cleanup() / get_logs()       │
-│  Phases: initialize → execute → report           │
-│                                                   │
-│  ┌─────────────────────────────────────────────┐ │
-│  │ Optional: LLMGoalSeekingAgent               │ │
-│  │  Error recovery, goal evaluation, adaptive  │ │
-│  └─────────────────────────────────────────────┘ │
+│       amplihack Goal Agent Generator             │
+│  PromptAnalyzer → ObjectivePlanner →             │
+│  SkillSynthesizer → AgentAssembler →             │
+│  GoalAgentPackager                               │
+└────────────────────┬────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────┐
+│            AutoMode (agent execution)            │
+│  Runs main.py with chosen SDK                    │
+│  (claude / copilot / microsoft / mini)           │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -69,36 +72,42 @@ A workload is a Python package that:
 3. Registers via entry point in `pyproject.toml`
 4. Declares a manifest in `workload.yaml`
 
-### Goal-seeking agent (your code)
+### Goal agent generator (amplihack)
 
-The agent is a class that:
-1. Receives a goal and configuration
-2. Executes in phases (initialize, execute, report)
-3. Reports status via callbacks
-4. Optionally uses LLM for adaptive behavior
+The workload uses the amplihack pipeline to create agents from goal prompts:
+1. **PromptAnalyzer** -- extracts goal, domain, constraints, success criteria
+2. **ObjectivePlanner** -- creates a 3-5 phase execution plan
+3. **SkillSynthesizer** -- matches skills and SDK tools
+4. **AgentAssembler** -- combines into an executable bundle
+5. **GoalAgentPackager** -- writes to disk (main.py, config, skills)
+
+The generated agent runs via **AutoMode** with the chosen SDK (claude, copilot, microsoft, mini).
 
 ## Data flow
 
 ```
-User runs: haymaker deploy data-collector --config item_count=50
+User runs: haymaker deploy my-workload --config goal_file=goals/my-goal.md
     │
     ▼
 CLI parses config into DeploymentConfig
     │
     ▼
-Registry finds DataCollectorWorkload via entry point
+Registry finds MyWorkload via entry point
     │
     ▼
-WorkloadBase.deploy() called
+deploy() reads goal prompt, runs amplihack generator pipeline
     │
     ▼
-Your workload creates GoalSeekingAgent
+Generator creates agent directory (main.py, config.json, skills/)
     │
     ▼
-Agent starts async task → phases run → status callbacks → state persisted
+Workload launches main.py as detached subprocess
     │
     ▼
-User queries: haymaker status <id> → reads persisted state
+Agent runs autonomously, logs to agent.log
+    │
+    ▼
+User queries: haymaker status <id> → checks process + persisted state
 ```
 
 ## State model

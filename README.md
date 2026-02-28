@@ -1,319 +1,107 @@
 # Haymaker Workload Starter
 
-A starter template for building custom [Agent Haymaker](https://github.com/rysweet/agent-haymaker) workloads. Clone this repo, rename the workload, and implement your domain logic.
+A goal-seeking agent workload for [Agent Haymaker](https://github.com/rysweet/agent-haymaker). Write a goal in markdown, deploy it, the workload generates and runs an autonomous AI agent.
+
+**Docs site:** [rysweet.github.io/haymaker-workload-starter](https://rysweet.github.io/haymaker-workload-starter/)
 
 ## Quick Start
 
 ```bash
-# 1. Clone and rename
 git clone https://github.com/rysweet/haymaker-workload-starter my-workload
 cd my-workload
-
-# 2. Install in development mode
 pip install -e ".[dev]"
 
-# 3. Verify registration
-haymaker workload list
-# => my-workload (0.1.0) - A starter workload template for Agent Haymaker
+export ANTHROPIC_API_KEY=sk-ant-...  # or configure another SDK
 
-# 4. Run tests
-pytest -q
+haymaker deploy my-workload \
+  --config goal_file=goals/example-file-organizer.md \
+  --yes
+# => Deployment started: my-workload-a1b2c3d4
 
-# 5. Deploy
-haymaker deploy my-workload --config item_count=25
+haymaker status my-workload-a1b2c3d4
+haymaker logs my-workload-a1b2c3d4
+haymaker cleanup my-workload-a1b2c3d4 --yes
 ```
+
+## How It Works
+
+You write a markdown file describing a goal:
+
+```markdown
+# File Organization Agent
+
+## Goal
+Scan the current working directory for files, classify them by type,
+and produce a summary report.
+
+## Constraints
+- Read-only: do not move or delete any files
+
+## Success Criteria
+- All files scanned and classified
+- Report written to output/file-report.md
+```
+
+The workload runs the [amplihack goal agent generator](https://rysweet.github.io/amplihack/GOAL_AGENT_GENERATOR_GUIDE/) to analyze the goal, create a phased execution plan, match skills, and assemble a runnable agent. The agent executes autonomously as a background process.
 
 ## Project Structure
 
 ```
 haymaker-workload-starter/
-├── pyproject.toml                     # Package config + workload entry point
-├── workload.yaml                      # Workload manifest (metadata + config schema)
-├── Dockerfile                         # Container image for Azure deployment
-├── infra/main.bicep                   # Azure infrastructure (Container Apps)
-├── scripts/setup-oidc.sh              # One-time OIDC federation setup
-├── .github/workflows/
-│   ├── ci.yml                         # Lint + test on every push/PR
-│   └── deploy.yml                     # Deploy to Azure (manual trigger)
+├── goals/                             # Goal prompts (write yours here)
+│   ├── example-data-collector.md
+│   └── example-file-organizer.md
 ├── src/haymaker_my_workload/
 │   ├── __init__.py                    # Public API
-│   └── workload.py                    # Workload implementation (start here)
-└── tests/
-    └── test_workload.py               # Full lifecycle tests
+│   └── workload.py                    # Goal-agent runtime
+├── tests/
+│   └── test_workload.py               # 12 tests
+├── docs/                              # GitHub Pages docs site
+├── infra/main.bicep                   # Azure Container Apps (Bicep)
+├── scripts/
+│   ├── setup-oidc.sh                  # One-time Azure OIDC setup
+│   └── e2e-test.sh                    # E2E verification script
+├── Dockerfile                         # Container image
+├── .github/workflows/
+│   ├── ci.yml                         # Lint + test
+│   ├── deploy.yml                     # Azure deploy pipeline
+│   └── pages.yml                      # Docs site deploy
+├── pyproject.toml                     # Package config
+└── workload.yaml                      # Workload manifest
 ```
 
-## How It Works
+## Configuration
 
-Agent Haymaker uses a plugin architecture. Your workload is a Python package that:
+| Option | Default | Description |
+|--------|---------|-------------|
+| `goal_file` | built-in default | Path to goal markdown |
+| `sdk` | `claude` | `claude`, `copilot`, `microsoft`, or `mini` |
+| `enable_memory` | `false` | Agent learns across runs |
+| `max_turns` | `15` | Maximum agentic iterations (1-100) |
 
-1. **Inherits from `WorkloadBase`** and implements 5 required methods
-2. **Registers via entry point** in `pyproject.toml`
-3. **Declares a manifest** in `workload.yaml`
+## SDK Options
 
-Once installed (`pip install -e .`), the platform discovers your workload automatically and all standard CLI commands work:
+| SDK | Auth | Best for |
+|-----|------|----------|
+| `claude` | `ANTHROPIC_API_KEY` | General tasks, deep reasoning |
+| `copilot` | `GH_TOKEN` | Code generation, git operations |
+| `microsoft` | Azure OpenAI + DefaultAzureCredential | Azure workloads |
+| `mini` | Any LLM API key via litellm | Lightweight tasks |
 
-```bash
-haymaker deploy my-workload           # calls your deploy()
-haymaker status <id>                  # calls your get_status()
-haymaker logs <id> --follow           # calls your get_logs()
-haymaker stop <id>                    # calls your stop()
-haymaker start <id>                   # calls your start()
-haymaker cleanup <id>                 # calls your cleanup()
-```
+## Documentation
 
-## Customization Guide
-
-### Step 1: Rename Your Workload
-
-Replace all instances of `my-workload` / `MyWorkload` / `haymaker_my_workload`:
-
-| File | What to change |
-|------|---------------|
-| `pyproject.toml` | `name`, entry point key + value, `packages` path |
-| `workload.yaml` | `name`, `package.name`, `package.entrypoint`, `config_schema` |
-| `src/haymaker_my_workload/` | Rename the directory |
-| `src/.../workload.py` | `MyWorkload` class name, `name` attribute, `validate_config()` rules |
-| `src/.../__init__.py` | Import + `__all__` |
-| `tests/test_workload.py` | Import path + validation tests |
-| `.env.example` | Credential names (if changed in `workload.yaml`) |
-
-### Step 2: Define Your Config Schema
-
-Edit `workload.yaml` to declare what settings your workload accepts:
-
-```yaml
-config_schema:
-  target_url:
-    type: string
-    required: true
-    description: "URL to monitor"
-  check_interval:
-    type: integer
-    default: 30
-    description: "Seconds between checks"
-```
-
-Users pass config via CLI:
-
-```bash
-haymaker deploy my-workload --config target_url=https://example.com check_interval=15
-```
-
-### Step 3: Implement the Five Required Methods
-
-Edit `src/haymaker_my_workload/workload.py`. Each method has TODO comments showing what to implement:
-
-```python
-class MyWorkload(WorkloadBase):
-    name = "my-workload"
-
-    async def deploy(self, config: DeploymentConfig) -> str:
-        """Provision resources and start your workload."""
-
-    async def get_status(self, deployment_id: str) -> DeploymentState:
-        """Return current state (refresh from external sources if needed)."""
-
-    async def stop(self, deployment_id: str) -> bool:
-        """Pause execution (must be resumable via start())."""
-
-    async def cleanup(self, deployment_id: str) -> CleanupReport:
-        """Delete ALL resources. Destructive and final."""
-
-    async def get_logs(self, deployment_id, follow=False, lines=100) -> AsyncIterator[str]:
-        """Stream log lines."""
-```
-
-### Step 4: Add Validation (Optional)
-
-Override `validate_config()` to reject bad configs before deployment starts:
-
-```python
-async def validate_config(self, config: DeploymentConfig) -> list[str]:
-    errors = []
-    if "target_url" not in config.workload_config:
-        errors.append("target_url is required")
-    return errors
-```
-
-### Step 5: Declare Credentials (Optional)
-
-If your workload needs secrets (API keys, tokens), declare them in `workload.yaml`:
-
-```yaml
-credentials:
-  - name: MY_API_KEY
-    required: true
-```
-
-Access them in your workload:
-
-```python
-api_key = await self.get_credential("MY_API_KEY")
-```
-
-## Platform Utilities
-
-`WorkloadBase` provides these helpers for free:
-
-| Method | Purpose |
-|--------|---------|
-| `await self.save_state(state)` | Persist deployment state |
-| `await self.load_state(id)` | Load deployment state |
-| `await self.get_credential(name)` | Fetch secrets from Key Vault / env |
-| `self.log(message, level)` | Unified logging |
-| `await self.list_deployments()` | List all deployments for this workload |
+- [Tutorial](https://rysweet.github.io/haymaker-workload-starter/tutorial) -- end-to-end with real results
+- [Architecture](https://rysweet.github.io/haymaker-workload-starter/architecture) -- how it all connects
+- [Deploy to Azure](https://rysweet.github.io/haymaker-workload-starter/deploy) -- OIDC pipeline
+- [Advanced: Custom Agents](https://rysweet.github.io/haymaker-workload-starter/advanced) -- hand-built agents
 
 ## Development
 
 ```bash
-# Install with dev dependencies
 pip install -e ".[dev]"
-
-# Run tests
-pytest -q
-
-# Run tests with coverage
-pytest --cov --cov-report=term-missing
-
-# Lint
-ruff check src/ tests/
-ruff format src/ tests/
-
-# Type check
-pyright src/
-
-# Install pre-commit hooks
-pre-commit install
+pytest -q               # 12 tests
+ruff check src/ tests/  # lint
 ```
-
-## Adding AI/LLM Capabilities
-
-Install with the `ai` extra for LLM integration:
-
-```bash
-pip install -e ".[ai]"
-```
-
-Then use the LLM abstraction in your workload:
-
-```python
-from agent_haymaker.llm import LLMConfig, create_llm_client
-
-async def deploy(self, config):
-    if config.workload_config.get("enable_ai"):
-        llm_config = LLMConfig.from_env()
-        llm = create_llm_client(llm_config)
-        response = await llm.generate("Your prompt here")
-```
-
-## Deployment States
-
-Your workload transitions through these states:
-
-```
-RUNNING ⇄ STOPPED
-   ↓         ↓
-CLEANING_UP ──┘
-   ├── COMPLETED  (success)
-   └── FAILED     (cleanup error)
-```
-
-`deploy()` sets the initial state to `RUNNING`. `stop()` only works on `RUNNING`
-or `PENDING` deployments. `cleanup()` is destructive and final -- it sets
-`COMPLETED` on success or `FAILED` if resource deletion errors occur. Double-cleanup
-is a safe no-op. Follow-mode logs automatically exit on `COMPLETED` or `FAILED`.
-
-> **Note:** The `PENDING` state is available but not used by the starter template.
-> Add it when your workload has async provisioning needs.
-
-## Testing Your Workload
-
-The included tests cover the full lifecycle. Add tests for your domain logic:
-
-```python
-class TestMyCustomBehavior:
-    async def test_deploy_processes_items(self):
-        workload = MyWorkload(platform=_mock_platform())
-        config = DeploymentConfig(
-            workload_name="my-workload",
-            workload_config={"item_count": 100},
-        )
-        dep_id = await workload.deploy(config)
-        state = await workload.get_status(dep_id)
-        assert state.metadata["item_count"] == 100
-        # Add your domain-specific assertions here
-```
-
-## Deploy to Azure
-
-The repo includes a GitHub Actions workflow that deploys your workload to
-Azure Container Apps using OIDC -- no stored secrets beyond three Azure IDs.
-
-### Prerequisites
-
-- Azure subscription
-- Azure CLI: `az login`
-- GitHub CLI: `gh auth login`
-
-### One-time setup
-
-Run the OIDC setup script to create a service principal with federated credentials
-and set the required GitHub secrets:
-
-```bash
-./scripts/setup-oidc.sh your-org/your-repo
-```
-
-This creates three repository secrets:
-- `AZURE_CLIENT_ID` -- service principal app ID
-- `AZURE_TENANT_ID` -- Azure AD tenant
-- `AZURE_SUBSCRIPTION_ID` -- target subscription
-
-No passwords are stored. GitHub Actions authenticates via OIDC token exchange.
-
-### Deploy
-
-Trigger the deployment manually from GitHub Actions:
-
-```bash
-gh workflow run deploy.yml -f environment=dev -f location=eastus
-```
-
-The workflow:
-1. Builds a Docker image with your workload installed
-2. Pushes to Azure Container Registry
-3. Deploys to Container Apps (Consumption tier, near-zero cost)
-4. Runs full E2E verification using the haymaker CLI:
-
-```
-haymaker workload list          # verify workload registered
-haymaker deploy my-workload     # start a deployment
-haymaker status <id>            # check status
-haymaker logs <id>              # view logs
-haymaker stop <id>              # pause
-haymaker start <id>             # resume
-haymaker cleanup <id>           # tear down
-```
-
-### Clean up
-
-Delete the Azure resource group when done:
-
-```bash
-az group delete --name haymaker-starter-dev-rg --yes --no-wait
-```
-
-### How OIDC works
-
-```
-GitHub Actions  ──OIDC token──▶  Azure AD  ──validates──▶  grants access
-                                     │
-                     federated credential matches:
-                     repo:org/repo:ref:refs/heads/main
-```
-
-No service principal passwords are stored in GitHub. Azure trusts GitHub's
-OIDC tokens based on the federated credential configuration.
 
 ## License
 
