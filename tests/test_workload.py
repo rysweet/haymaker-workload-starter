@@ -299,3 +299,201 @@ class TestGetLogs:
         with pytest.raises(DeploymentNotFoundError):
             async for _ in workload.get_logs("nonexistent"):
                 pass
+
+    async def test_logs_from_agent_dir_after_restart(self, tmp_path):
+        """After process restart, logs are read from state metadata agent_dir."""
+        workload = MyWorkload(platform=_mock_platform())
+
+        # Simulate an agent_dir with an agent.log written by a previous process
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        log_file = agent_dir / "agent.log"
+        log_file.write_text("line1\nline2\nline3\n")
+
+        # Create state as if a previous process deployed this
+        state = DeploymentState(
+            deployment_id="test-restart",
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir)},
+        )
+        await workload.save_state(state)
+
+        # No in-memory _logs or _agent_log_files -- simulating restart
+        collected = []
+        async for line in workload.get_logs("test-restart"):
+            collected.append(line)
+
+        assert "line1" in collected
+        assert "line2" in collected
+        assert "line3" in collected
+
+    async def test_logs_prefers_in_memory_agent_log(self, tmp_path):
+        """When in-memory _agent_log_files is set, it is used over metadata."""
+        workload = MyWorkload(platform=_mock_platform())
+
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        log_file = agent_dir / "agent.log"
+        log_file.write_text("from-disk\n")
+
+        # Set up in-memory reference to same file
+        workload._agent_log_files["test-mem"] = log_file
+
+        state = DeploymentState(
+            deployment_id="test-mem",
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir)},
+        )
+        await workload.save_state(state)
+
+        collected = []
+        async for line in workload.get_logs("test-mem"):
+            collected.append(line)
+
+        assert "from-disk" in collected
+
+
+class TestGetStatusLogDetection:
+    """Test that get_status detects completion from agent.log after restart."""
+
+    async def test_status_detects_goal_achieved(self, tmp_path):
+        workload = MyWorkload(platform=_mock_platform())
+
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        log_file = agent_dir / "agent.log"
+        log_file.write_text("Starting agent...\nProcessing...\nGoal achieved!\n")
+
+        state = DeploymentState(
+            deployment_id="test-achieved",
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir)},
+        )
+        await workload.save_state(state)
+
+        result = await workload.get_status("test-achieved")
+        assert result.status == DeploymentStatus.COMPLETED
+        assert result.phase == "completed"
+
+    async def test_status_detects_exit_code(self, tmp_path):
+        workload = MyWorkload(platform=_mock_platform())
+
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        log_file = agent_dir / "agent.log"
+        log_file.write_text("Starting agent...\nexit code 1\n")
+
+        state = DeploymentState(
+            deployment_id="test-exit",
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir)},
+        )
+        await workload.save_state(state)
+
+        result = await workload.get_status("test-exit")
+        assert result.status == DeploymentStatus.FAILED
+        assert result.phase == "failed"
+        assert "exit code" in result.error.lower()
+
+    async def test_status_stays_running_when_no_log(self, tmp_path):
+        workload = MyWorkload(platform=_mock_platform())
+
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        # No agent.log file
+
+        state = DeploymentState(
+            deployment_id="test-nolog",
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir)},
+        )
+        await workload.save_state(state)
+
+        result = await workload.get_status("test-nolog")
+        assert result.status == DeploymentStatus.RUNNING
+
+    async def test_status_stays_running_when_log_inconclusive(self, tmp_path):
+        workload = MyWorkload(platform=_mock_platform())
+
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        log_file = agent_dir / "agent.log"
+        log_file.write_text("Starting agent...\nStill working...\n")
+
+        state = DeploymentState(
+            deployment_id="test-working",
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir)},
+        )
+        await workload.save_state(state)
+
+        result = await workload.get_status("test-working")
+        assert result.status == DeploymentStatus.RUNNING
+
+
+class TestGetStatusAgentOutputDir:
+    """Test that get_status includes agent_output_dir in metadata."""
+
+    async def test_status_includes_agent_output_dir(self, tmp_path):
+        workload = MyWorkload(platform=_mock_platform())
+
+        state = DeploymentState(
+            deployment_id="test-output",
+            workload_name="my-workload",
+            status=DeploymentStatus.COMPLETED,
+            phase="completed",
+            metadata={"agent_dir": str(tmp_path / "my-agent")},
+        )
+        await workload.save_state(state)
+
+        result = await workload.get_status("test-output")
+        assert "agent_output_dir" in result.metadata
+        assert result.metadata["agent_output_dir"] == str(tmp_path / "my-agent")
+
+    async def test_status_without_agent_dir(self):
+        workload = MyWorkload(platform=_mock_platform())
+
+        state = DeploymentState(
+            deployment_id="test-no-dir",
+            workload_name="my-workload",
+            status=DeploymentStatus.COMPLETED,
+            phase="completed",
+            metadata={},
+        )
+        await workload.save_state(state)
+
+        result = await workload.get_status("test-no-dir")
+        assert "agent_output_dir" not in result.metadata
+
+
+class TestReadLastLine:
+    def test_reads_last_nonempty_line(self, tmp_path):
+        f = tmp_path / "test.log"
+        f.write_text("first\nsecond\nthird\n\n")
+        assert MyWorkload._read_last_line(f) == "third"
+
+    def test_returns_none_for_empty_file(self, tmp_path):
+        f = tmp_path / "empty.log"
+        f.write_text("")
+        assert MyWorkload._read_last_line(f) is None
+
+    def test_returns_none_for_missing_file(self, tmp_path):
+        f = tmp_path / "missing.log"
+        assert MyWorkload._read_last_line(f) is None
+
+    def test_single_line(self, tmp_path):
+        f = tmp_path / "single.log"
+        f.write_text("only line\n")
+        assert MyWorkload._read_last_line(f) == "only line"

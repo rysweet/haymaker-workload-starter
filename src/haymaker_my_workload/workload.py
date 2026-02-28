@@ -153,7 +153,7 @@ class MyWorkload(WorkloadBase):
         if state is None:
             raise DeploymentNotFoundError(f"Deployment {deployment_id} not found")
 
-        # Check if detached agent process has finished
+        # Check if detached agent process has finished (in-memory handle)
         proc = self._processes.get(deployment_id)
         if proc and state.status == DeploymentStatus.RUNNING:
             rc = proc.poll()
@@ -168,6 +168,34 @@ class MyWorkload(WorkloadBase):
                     state.error = f"Agent exited with code {rc}"
                 state.completed_at = datetime.now(tz=UTC)
                 await self.save_state(state)
+
+        # If still RUNNING but no in-memory process (e.g. after restart),
+        # check the agent.log file for completion indicators.
+        if state.status == DeploymentStatus.RUNNING and not proc:
+            agent_dir_str = (state.metadata or {}).get("agent_dir")
+            if agent_dir_str:
+                log_file = Path(agent_dir_str) / "agent.log"
+                if log_file.exists():
+                    last_line = self._read_last_line(log_file)
+                    if last_line is not None:
+                        lower = last_line.lower()
+                        if "goal achieved" in lower:
+                            state.status = DeploymentStatus.COMPLETED
+                            state.phase = "completed"
+                            state.completed_at = datetime.now(tz=UTC)
+                            await self.save_state(state)
+                        elif "exit code" in lower:
+                            # Try to extract exit code number
+                            state.status = DeploymentStatus.FAILED
+                            state.phase = "failed"
+                            state.error = f"Agent log indicates: {last_line.strip()}"
+                            state.completed_at = datetime.now(tz=UTC)
+                            await self.save_state(state)
+
+        # Include agent_dir in metadata so `haymaker status` shows it
+        agent_dir_str = (state.metadata or {}).get("agent_dir")
+        if agent_dir_str:
+            state.metadata["agent_output_dir"] = agent_dir_str
 
         return state
 
@@ -228,14 +256,22 @@ class MyWorkload(WorkloadBase):
     async def get_logs(
         self, deployment_id: str, follow: bool = False, lines: int = 100
     ) -> AsyncIterator[str]:
-        await self.get_status(deployment_id)
+        state = await self.get_status(deployment_id)
 
-        # Yield workload logs (generator pipeline output)
+        # Yield workload logs (generator pipeline output, in-memory)
         for line in self._logs.get(deployment_id, [])[-lines:]:
             yield line
 
-        # Also yield from agent log file (efficient tail)
+        # Resolve agent log file: prefer in-memory handle, fall back to
+        # state metadata so logs survive process restarts.
         log_file = self._agent_log_files.get(deployment_id)
+        if log_file is None:
+            agent_dir_str = (state.metadata or {}).get("agent_dir")
+            if agent_dir_str:
+                candidate = Path(agent_dir_str) / "agent.log"
+                if candidate.exists():
+                    log_file = candidate
+
         if log_file and log_file.exists():
             with open(log_file) as f:
                 tail = deque(f, maxlen=lines)
@@ -407,6 +443,20 @@ class MyWorkload(WorkloadBase):
                 self._terminate_process(dep_id)
             except Exception:
                 pass
+
+    @staticmethod
+    def _read_last_line(path: Path) -> str | None:
+        """Read the last non-empty line of a file, or None if the file is empty."""
+        try:
+            with open(path) as f:
+                last = None
+                for line in f:
+                    stripped = line.strip()
+                    if stripped:
+                        last = stripped
+                return last
+        except OSError:
+            return None
 
     def _append_log(self, deployment_id: str, message: str) -> None:
         ts = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
