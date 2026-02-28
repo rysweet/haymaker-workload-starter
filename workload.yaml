@@ -22,8 +22,8 @@ config_schema:
     description: "SDK for agent execution"
   enable_memory:
     type: boolean
-    default: false
-    description: "Enable agent memory for learning across runs"
+    default: true
+    description: "Enable agent memory for learning across runs (requires amplihack-memory-lib)"
   max_turns:
     type: integer
     default: 15

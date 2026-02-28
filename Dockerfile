@@ -10,7 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install agent-haymaker platform and amplihack from GitHub (not yet on PyPI)
 RUN pip install --no-cache-dir \
     "agent-haymaker @ git+https://github.com/rysweet/agent-haymaker.git" \
-    "amplihack @ git+https://github.com/rysweet/amplihack.git"
+    "amplihack @ git+https://github.com/rysweet/amplihack.git" \
+    "amplihack-memory-lib @ git+https://github.com/rysweet/amplihack-memory-lib.git"
 
 # Install this workload
 COPY . .
