@@ -180,7 +180,7 @@ jobs:
             --registry-username "$ACR_USER" \
             --registry-password "$ACR_PASS" \
             --trigger-type Manual \
-            --replica-timeout 120 \
+            --replica-timeout 300 \
             --replica-retry-limit 0 \
             --cpu 0.25 --memory 0.5Gi \
             --parallelism 1 \
