@@ -57,7 +57,7 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   }
 }
 
-// ---------- Container Apps Environment (Consumption) ----------
+// ---------- Container Apps Environment (Dedicated workload profile) ----------
 resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: envName
   location: location
@@ -69,6 +69,18 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
         sharedKey: logAnalytics.listKeys().primarySharedKey
       }
     }
+    workloadProfiles: [
+      {
+        name: 'Consumption'
+        workloadProfileType: 'Consumption'
+      }
+      {
+        name: 'D4'
+        workloadProfileType: 'D4'
+        minimumCount: 0
+        maximumCount: 1
+      }
+    ]
   }
 }
 
@@ -81,6 +93,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   }
   properties: {
     managedEnvironmentId: containerEnv.id
+    workloadProfileName: 'D4'
     configuration: {
       secrets: [
         {
@@ -106,8 +119,8 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'workload'
           image: image
           resources: {
-            cpu: json('2')
-            memory: '4Gi'
+            cpu: json('4')
+            memory: '16Gi'
           }
           env: [
             {

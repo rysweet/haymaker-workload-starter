@@ -183,9 +183,10 @@ jobs:
             --registry-username "$ACR_USER" \
             --registry-password "$ACR_PASS" \
             --trigger-type Manual \
-            --replica-timeout 600 \
+            --replica-timeout 28800 \
             --replica-retry-limit 0 \
-            --cpu 2 --memory 4Gi \
+            --cpu 4 --memory 16Gi \
+            --workload-profile-name D4 \
             --parallelism 1 \
             --replica-completion-count 1 \
             --env-vars "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" "CLAUDECODE=" "AZURE_OPENAI_ENDPOINT=${{ secrets.AZURE_OPENAI_ENDPOINT }}" "AZURE_OPENAI_DEPLOYMENT=${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" "LLM_PROVIDER=anthropic" \
@@ -201,7 +202,7 @@ jobs:
 
           # Poll for completion
           echo "==> Waiting for E2E job..."
-          for i in $(seq 1 60); do
+          for i in $(seq 1 480); do
             STATUS=$(az containerapp job execution show \
               --name "haymaker-e2e-test" \
               --resource-group "$RG_NAME" \

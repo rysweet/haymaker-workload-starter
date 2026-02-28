@@ -61,8 +61,8 @@ The workflow runs three jobs:
 | Resource | SKU | Cost |
 |----------|-----|------|
 | Container Registry | Basic | ~$5/mo |
-| Container Apps Environment | Consumption | ~$0 when idle |
-| Container App | 2 vCPU, 4 GiB | ~$0.10/hr when active |
+| Container Apps Environment | Dedicated (D4 profile) | ~$0 when scaled to 0 |
+| Container App | 4 vCPU, 16 GiB (D4) | ~$0.30/hr when active |
 | Log Analytics | Per-GB | ~$0 at this scale |
 
 ## E2E verification
