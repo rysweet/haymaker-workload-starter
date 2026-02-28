@@ -499,6 +499,16 @@ class DataCollectorWorkload(WorkloadBase):
         await self.save_state(state)
         return True
 
+    async def start(self, deployment_id: str) -> bool:
+        state = await self.get_status(deployment_id)
+        if state.status != DeploymentStatus.STOPPED:
+            return False
+        state.status = DeploymentStatus.RUNNING
+        state.phase = "running"
+        state.stopped_at = None
+        await self.save_state(state)
+        return True
+
     async def cleanup(self, deployment_id: str) -> CleanupReport:
         state = await self.get_status(deployment_id)
         if state.status in _TERMINAL_STATES:
