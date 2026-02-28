@@ -2,15 +2,17 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies (git needed for pip install from GitHub)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
+    curl git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install agent-haymaker platform + this workload
+# Install agent-haymaker platform from GitHub (not yet on PyPI)
+RUN pip install --no-cache-dir "agent-haymaker @ git+https://github.com/rysweet/agent-haymaker.git"
+
+# Install this workload
 COPY . .
-RUN pip install --no-cache-dir agent-haymaker>=0.1.0 && \
-    pip install --no-cache-dir .
+RUN pip install --no-cache-dir .
 
 # Verify the workload is registered
 RUN haymaker workload list
