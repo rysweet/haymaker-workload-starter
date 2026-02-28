@@ -15,7 +15,6 @@ Configuration:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 import uuid
@@ -73,7 +72,8 @@ class MyWorkload(WorkloadBase):
     def __init__(self, platform: Platform | None = None) -> None:
         super().__init__(platform=platform)
         self._logs: dict[str, list[str]] = {}
-        self._processes: dict[str, asyncio.subprocess.Process] = {}
+        self._processes: dict[str, object] = {}  # subprocess.Popen instances
+        self._agent_log_files: dict[str, Path] = {}  # deployment_id -> log file
 
     async def deploy(self, config: DeploymentConfig) -> str:
         """Generate an agent from a goal prompt and execute it."""
@@ -132,7 +132,8 @@ class MyWorkload(WorkloadBase):
         await self.save_state(state)
 
         # Execute agent in background
-        asyncio.create_task(self._execute_agent(deployment_id, agent_dir, max_turns))
+        # Launch agent as detached subprocess (returns immediately)
+        self._execute_agent_detached(deployment_id, agent_dir, max_turns)
 
         return deployment_id
 
@@ -140,6 +141,23 @@ class MyWorkload(WorkloadBase):
         state = await self.load_state(deployment_id)
         if state is None:
             raise DeploymentNotFoundError(f"Deployment {deployment_id} not found")
+
+        # Check if detached agent process has finished
+        proc = self._processes.get(deployment_id)
+        if proc and state.status == DeploymentStatus.RUNNING:
+            rc = proc.poll()
+            if rc is not None:
+                self._processes.pop(deployment_id, None)
+                if rc == 0:
+                    state.status = DeploymentStatus.COMPLETED
+                    state.phase = "completed"
+                else:
+                    state.status = DeploymentStatus.FAILED
+                    state.phase = "failed"
+                    state.error = f"Agent exited with code {rc}"
+                state.completed_at = datetime.now(tz=UTC)
+                await self.save_state(state)
+
         return state
 
     async def stop(self, deployment_id: str) -> bool:
@@ -151,7 +169,7 @@ class MyWorkload(WorkloadBase):
 
         # Kill the agent process if running
         proc = self._processes.pop(deployment_id, None)
-        if proc and proc.returncode is None:
+        if proc and proc.poll() is None:
             proc.terminate()
             self._append_log(deployment_id, "Agent process terminated")
 
@@ -183,7 +201,7 @@ class MyWorkload(WorkloadBase):
 
         # Kill process if still running
         proc = self._processes.pop(deployment_id, None)
-        if proc and proc.returncode is None:
+        if proc and proc.poll() is None:
             proc.terminate()
 
         self._logs.pop(deployment_id, None)
@@ -204,25 +222,18 @@ class MyWorkload(WorkloadBase):
         self, deployment_id: str, follow: bool = False, lines: int = 100
     ) -> AsyncIterator[str]:
         await self.get_status(deployment_id)
-        log_lines = self._logs.get(deployment_id, [])
-        for line in log_lines[-lines:]:
+
+        # Yield workload logs (generator pipeline output)
+        for line in self._logs.get(deployment_id, [])[-lines:]:
             yield line
 
-        if follow:
-            seen = len(log_lines)
-            while True:
-                state = await self.load_state(deployment_id)
-                if state is None or state.status in _TERMINAL_STATES:
-                    current = self._logs.get(deployment_id, [])
-                    for line in current[seen:]:
-                        yield line
-                    break
-                current = self._logs.get(deployment_id, [])
-                if len(current) > seen:
-                    for line in current[seen:]:
-                        yield line
-                    seen = len(current)
-                await asyncio.sleep(1)
+        # Also yield from agent log file if it exists
+        log_file = self._agent_log_files.get(deployment_id)
+        if log_file and log_file.exists():
+            with open(log_file) as f:
+                file_lines = f.readlines()
+            for line in file_lines[-lines:]:
+                yield line.rstrip()
 
     async def validate_config(self, config: DeploymentConfig) -> list[str]:
         errors = []
@@ -298,63 +309,39 @@ class MyWorkload(WorkloadBase):
 
         return agent_dir
 
-    async def _execute_agent(self, deployment_id: str, agent_dir: Path, max_turns: int) -> None:
-        """Run the generated agent's main.py as a subprocess."""
+    def _execute_agent_detached(self, deployment_id: str, agent_dir: Path, max_turns: int) -> None:
+        """Launch the agent as a detached subprocess (fire-and-forget).
+
+        Uses subprocess.Popen instead of asyncio so the agent runs
+        independently of the event loop. Logs go to a file that
+        get_logs() reads. A wrapper script updates deployment state
+        when the agent finishes.
+        """
+        import subprocess
+
         main_py = agent_dir / "main.py"
         if not main_py.exists():
             self._append_log(deployment_id, f"ERROR: {main_py} not found")
-            state = await self.load_state(deployment_id)
-            if state:
-                state.status = DeploymentStatus.FAILED
-                state.error = f"Agent main.py not found in {agent_dir}"
-                await self.save_state(state)
             return
 
+        log_file = agent_dir / "agent.log"
         self._append_log(deployment_id, f"Executing agent (max_turns={max_turns})")
+        self._append_log(deployment_id, f"Agent log: {log_file}")
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "python3",
-                str(main_py),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
+        # Store log file path for get_logs() to read
+        self._agent_log_files[deployment_id] = log_file
+
+        # Launch detached -- don't wait for completion
+        with open(log_file, "w") as lf:
+            proc = subprocess.Popen(
+                ["python3", str(main_py)],
+                stdout=lf,
+                stderr=subprocess.STDOUT,
                 cwd=str(agent_dir),
+                start_new_session=True,  # Fully detach from parent
             )
-            self._processes[deployment_id] = proc
-
-            # Stream stdout to logs
-            while True:
-                line = await proc.stdout.readline()
-                if not line:
-                    break
-                self._append_log(deployment_id, line.decode().rstrip())
-
-            await proc.wait()
-            exit_code = proc.returncode
-            self._append_log(deployment_id, f"Agent exited with code {exit_code}")
-
-            state = await self.load_state(deployment_id)
-            if state and state.status == DeploymentStatus.RUNNING:
-                if exit_code == 0:
-                    state.status = DeploymentStatus.COMPLETED
-                    state.phase = "completed"
-                else:
-                    state.status = DeploymentStatus.FAILED
-                    state.phase = "failed"
-                    state.error = f"Agent exited with code {exit_code}"
-                state.completed_at = datetime.now(tz=UTC)
-                await self.save_state(state)
-
-        except Exception as exc:
-            self._append_log(deployment_id, f"ERROR: {exc}")
-            state = await self.load_state(deployment_id)
-            if state:
-                state.status = DeploymentStatus.FAILED
-                state.error = str(exc)
-                await self.save_state(state)
-
-        finally:
-            self._processes.pop(deployment_id, None)
+        self._processes[deployment_id] = proc
+        self._append_log(deployment_id, f"Agent started (pid={proc.pid})")
 
     def _append_log(self, deployment_id: str, message: str) -> None:
         ts = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
