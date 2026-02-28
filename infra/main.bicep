@@ -26,9 +26,15 @@ param acrName string
 @allowed(['dev', 'staging', 'prod'])
 param environment string = 'dev'
 
-@description('Anthropic API key for LLM-powered agents')
+@description('Anthropic API key for Claude SDK agents')
 @secure()
 param anthropicApiKey string = ''
+
+@description('Azure OpenAI endpoint (for microsoft SDK with DefaultAzureCredential)')
+param azureOpenAiEndpoint string = ''
+
+@description('Azure OpenAI deployment name')
+param azureOpenAiDeployment string = ''
 
 // ---------- Naming ----------
 var suffix = uniqueString(resourceGroup().id)
@@ -70,6 +76,9 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
   location: location
+  identity: {
+    type: 'SystemAssigned'
+  }
   properties: {
     managedEnvironmentId: containerEnv.id
     configuration: {
@@ -109,6 +118,18 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'CLAUDECODE'
               value: ''
             }
+            {
+              name: 'AZURE_OPENAI_ENDPOINT'
+              value: azureOpenAiEndpoint
+            }
+            {
+              name: 'AZURE_OPENAI_DEPLOYMENT'
+              value: azureOpenAiDeployment
+            }
+            {
+              name: 'LLM_PROVIDER'
+              value: 'anthropic'
+            }
           ]
         }
       ]
@@ -123,3 +144,4 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
 // ---------- Outputs ----------
 output appName string = containerApp.name
 output appFqdn string = containerApp.properties.configuration.?ingress.?fqdn ?? 'no-ingress'
+output principalId string = containerApp.identity.principalId
