@@ -1,14 +1,14 @@
 ---
 layout: default
-title: "Tutorial: Deploy a Goal-Seeking Agent (Local)"
+title: "Tutorial: Deploy a Goal-Seeking Agent"
 nav_order: 2
-description: "Create and run an autonomous AI agent from a markdown goal prompt"
+description: "Create and run an autonomous AI agent from a markdown goal prompt -- tested end-to-end with real results"
 ---
 
 # Tutorial: Deploy a Goal-Seeking Agent
 {: .no_toc }
 
-Create an autonomous AI agent by writing a goal in markdown. No Python required. This tutorial walks through a real deployment that was tested end-to-end, with actual logs and output.
+Create an autonomous AI agent by writing a goal in markdown. Choose from 4 SDKs. This tutorial was tested end-to-end with real deployments -- every command, log, and output shown here is from an actual run.
 {: .fs-6 .fw-300 }
 
 <details open markdown="block">
@@ -22,60 +22,55 @@ Create an autonomous AI agent by writing a goal in markdown. No Python required.
 
 ## What you will do
 
-1. Write a goal prompt describing what the agent should accomplish
-2. Deploy it with one command
-3. Watch the agent work autonomously
-4. Inspect the results
-
-The entire process from goal to working output took **one command** and the agent completed its goal in **12 turns over ~45 minutes**, scanning 21 files and producing a categorized report.
+1. Write a goal prompt describing what an agent should accomplish
+2. Deploy it with one command (returns in <1 second)
+3. Monitor the agent as it works autonomously
+4. Inspect the output the agent produced
+5. Try different SDKs (Claude, Copilot, Microsoft, Mini)
 
 <div class="concept-box" markdown="1">
 
 #### How this works
 
-You write a markdown file describing a goal. The workload passes it through the [amplihack goal agent generator](https://rysweet.github.io/amplihack/GOAL_AGENT_GENERATOR_GUIDE/) which:
+You write a markdown file describing a goal. The workload runs the [amplihack goal agent generator](https://rysweet.github.io/amplihack/GOAL_AGENT_GENERATOR_GUIDE/) pipeline:
 
-1. **Analyzes** the goal (extracts domain, constraints, success criteria)
-2. **Plans** a phased execution (3-5 phases with dependencies)
-3. **Matches** skills and SDK tools to the plan
-4. **Assembles** a runnable agent with `main.py`, config, and skills
-5. **Executes** it via AutoMode (an agentic loop using your chosen SDK)
+**PromptAnalyzer** (extracts goal, domain, constraints) --> **ObjectivePlanner** (creates phased plan) --> **SkillSynthesizer** (matches tools) --> **AgentAssembler** (builds executable bundle) --> **AutoMode** (runs the agent)
 
-The platform handles lifecycle management -- you deploy, monitor, stop, and clean up through `haymaker` CLI commands.
+The `haymaker` CLI manages the lifecycle: deploy, monitor, stop, clean up.
 
 </div>
 
 ## Prerequisites
 
-- Python 3.11+
-- [agent-haymaker](https://github.com/rysweet/agent-haymaker) installed
-- [amplihack](https://github.com/rysweet/amplihack) installed
-- An API key for your chosen SDK (e.g. `ANTHROPIC_API_KEY` for Claude)
-
-## Step 1: Set up
-
 ```bash
+# Install the platform and workload
+pip install agent-haymaker   # or: pip install -e path/to/agent-haymaker
+pip install amplihack        # or: pip install -e path/to/amplihack
+
 git clone https://github.com/rysweet/haymaker-workload-starter my-workload
 cd my-workload
 pip install -e ".[dev]"
-```
 
-Verify the workload is registered:
-
-```bash
+# Verify
 haymaker workload list
+# => Installed workloads:
+# =>   - my-workload
 ```
 
-```
-Installed workloads:
-  - my-workload
-```
+You also need credentials for at least one SDK:
+
+| SDK | What to set |
+|-----|-------------|
+| Claude | `export ANTHROPIC_API_KEY=sk-ant-...` |
+| Copilot | `export GH_TOKEN=$(gh auth token)` |
+| Microsoft | `export AZURE_OPENAI_ENDPOINT=https://your-instance.openai.azure.com/` and `export AZURE_OPENAI_DEPLOYMENT=gpt-5` |
+| Mini | `export ANTHROPIC_API_KEY=sk-ant-...` (uses litellm) |
 
 ---
 
-## Step 2: Write a goal prompt
+## Step 1: Write a goal
 
-The starter repo comes with example goals in `goals/`. Here is the one we used for our real test run:
+Create a markdown file in `goals/`. Here is the one we used:
 
 **`goals/example-file-organizer.md`:**
 
@@ -99,39 +94,37 @@ Scan the current working directory for files, classify them by type
 
 <div class="concept-box" markdown="1">
 
-#### What makes a good goal prompt
+#### Goal prompt structure
 
-The generator extracts four things from your markdown:
+| Section | Purpose | Example |
+|---------|---------|---------|
+| `## Goal` | What to accomplish (one sentence) | "Scan files and produce a report" |
+| `## Constraints` | Boundaries to respect | "Read-only", "stdlib only" |
+| `## Success Criteria` | How to know it's done | "Report at output/file-report.md" |
 
-| Section | What it does | Example |
-|---------|-------------|---------|
-| `## Goal` | One clear sentence describing the objective | "Scan files and produce a report" |
-| `## Constraints` | Boundaries the agent must respect | "Read-only", "stdlib only" |
-| `## Success Criteria` | Measurable outcomes that define "done" | "Report written to output/" |
-
-The **domain** and **complexity** are auto-classified from the goal text. Our file organizer was classified as `reporting` domain, `moderate` complexity.
+The domain (reporting, data-processing, security, etc.) and complexity are auto-detected.
 
 </div>
 
 ---
 
-## Step 3: Deploy
+## Step 2: Deploy
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...   # your API key
-
 haymaker deploy my-workload \
   --config goal_file=goals/example-file-organizer.md \
   --yes
 ```
 
-Output:
-
 ```
 Deployment started: my-workload-9572f94f
 ```
 
-What happened behind the scenes (from the logs):
+Deploy returns in **<1 second**. The agent runs as a detached background process. What happened:
+
+```bash
+haymaker logs my-workload-9572f94f
+```
 
 ```
 [2026-02-28 07:29:32] Starting deployment my-workload-9572f94f
@@ -142,22 +135,21 @@ What happened behind the scenes (from the logs):
 [2026-02-28 07:29:32] Matched 1 skills, 5 SDK tools
 [2026-02-28 07:29:32] Agent bundle packaged
 [2026-02-28 07:29:32] Executing agent (max_turns=15)
+[2026-02-28 07:29:32] Agent started (pid=234959)
 ```
 
-The generator analyzed the goal and created a 4-phase execution plan:
+The generator created this execution plan:
 
 | Phase | Est. Duration | What it does |
 |-------|--------------|-------------|
-| Planning | 15 min | Analyze the goal, design the approach |
+| Planning | 15 min | Analyze goal, design approach |
 | Implementation | 15 min | Write the scanner code |
 | Testing | 15 min | Verify the implementation |
-| Deployment | 15 min | Run the scanner, generate the report |
+| Deployment | 15 min | Run scanner, generate report |
 
 ---
 
-## Step 4: Monitor
-
-Check status while the agent works:
+## Step 3: Monitor
 
 ```bash
 haymaker status my-workload-9572f94f
@@ -171,36 +163,77 @@ Deployment: my-workload-9572f94f
   Started:  2026-02-28 07:29:32.123456+00:00
 ```
 
-View logs (the agent's stdout streams here):
+Watch the agent work:
 
 ```bash
 haymaker logs my-workload-9572f94f
 ```
 
-The agent ran for **12 turns** using the Claude SDK. During those turns it:
+The logs show the agent's AutoMode turns. In our test run, the agent used 12 turns over 44 minutes and 42 seconds (85 messages total).
 
-1. Analyzed the requirements and identified 6 explicit requirements and 6 implicit decisions
-2. Wrote `scanner.py` -- a 200-line file scanner with extension-based classification
-3. Wrote `test_scanner.py` and ran the tests
-4. Executed the scanner against the working directory
-5. Self-evaluated against 8 measurable criteria
-6. Documented its architectural decisions in code comments
+Check status periodically:
+
+```bash
+# Poll until done
+while true; do
+  haymaker status my-workload-9572f94f 2>&1 | grep "Status:"
+  sleep 30
+done
+```
+
+```
+  Status:   running
+  Status:   running
+  ...
+  Status:   completed
+```
 
 ---
 
-## Step 5: Inspect the results
+## Step 4: Inspect the results
 
-After ~45 minutes the agent completed. Final status:
+When the agent finishes:
+
+```bash
+haymaker status my-workload-9572f94f
+```
 
 ```
-✓ Session transcript exported (85 messages, 44m 42s)
+Deployment: my-workload-9572f94f
+  Workload: my-workload
+  Status:   completed
+  Phase:    completed
+```
+
+The agent's final log entry:
+
+```
 Goal achieved successfully!
 Exit code: 0
+✓ Session transcript exported (85 messages, 44m 42s)
 ```
 
-### The generated report
+### What the agent produced
 
-The agent created `output/file-report.md`:
+The agent **wrote code from scratch** to achieve its goal:
+
+```
+.haymaker/agents/my-workload-9572f94f/
+├── main.py              # Entry point (generated by amplihack)
+├── scanner.py           # Written by the agent (200 lines)
+├── test_scanner.py      # Tests written by the agent
+├── output/
+│   └── file-report.md   # The deliverable
+├── prompt.md            # Your goal
+├── agent_config.json    # Execution plan
+└── agent.log            # Full stdout from the agent
+```
+
+### The report
+
+```bash
+cat .haymaker/agents/my-workload-9572f94f/*/output/file-report.md
+```
 
 ```markdown
 # File Organization Report
@@ -216,77 +249,28 @@ Generated: 2026-02-28T16:11:22Z
 | data     |     3 |
 | other    |     3 |
 | **Total**|    21 |
-
-## Files by Category
-
-### Code (2 files)
-- main.py
-- scanner.py
-
-### Docs (8 files)
-- README.md
-- prompt.md
-- requirements.txt
-...
-
-### Config (5 files)
-- agent_config.json
-- .claude/context/execution_plan.json
-...
-
-### Data (3 files)
-- .claude/runtime/logs/.../auto.jsonl
-...
-
-### Other (3 files)
-- .claude/runtime/logs/.../auto.log
-...
 ```
 
 ### The agent's self-evaluation
 
-The agent evaluated itself against 8 criteria it derived from the goal:
+The agent verified 8 criteria it derived from the goal:
 
-| Criterion | Target | Result |
-|-----------|--------|--------|
-| **Coverage** | 100% of files scanned | 21/21 |
-| **Classification** | Every file categorized | All 21 assigned |
-| **Categories** | Only the 5 valid categories | code, docs, config, data, other |
-| **Extension-only** | No content inspection | Uses `path.suffix` only |
-| **Read-only** | 0 moves, 0 deletes | No mutations |
-| **Report location** | `output/file-report.md` | Present |
-| **Report format** | Valid Markdown with table | Renders correctly |
-| **Counts** | Sum matches total | 2+8+5+3+3 = 21 |
+| Criterion | Result |
+|-----------|--------|
+| 100% of files scanned | 21/21 |
+| Every file categorized | All 21 assigned |
+| Only 5 valid categories | code, docs, config, data, other |
+| Extension-only logic | Uses `path.suffix` only |
+| Read-only (no mutations) | 0 moves, 0 deletes |
+| Report at `output/file-report.md` | Present |
+| Valid Markdown with table | Renders correctly |
+| Counts sum to total | 2+8+5+3+3 = 21 |
 
-**All 8 criteria passed.**
-
-### What the agent built
-
-The agent wrote code from scratch to achieve its goal:
-
-```
-agent-directory/
-├── main.py              # Entry point (generated by amplihack)
-├── scanner.py           # Written by the agent autonomously (200 lines)
-├── test_scanner.py      # Tests written by the agent
-├── prompt.md            # Your goal prompt
-├── agent_config.json    # Execution plan + metadata
-├── output/
-│   └── file-report.md   # The deliverable
-└── .claude/
-    └── runtime/logs/    # Full execution traces (85 messages)
-```
-
-The `scanner.py` the agent wrote includes:
-- Recursive directory walking with `os.walk`
-- Extension-based classification using a comprehensive map (100+ extensions)
-- Markdown report renderer with summary table and per-category file lists
-- Exclusion of the `output/` directory to prevent circular self-inclusion
-- Documented architectural decisions in code comments
+**All 8 criteria passed. Goal achieved.**
 
 ---
 
-## Step 6: Clean up
+## Step 5: Clean up
 
 ```bash
 haymaker cleanup my-workload-9572f94f --yes
@@ -299,91 +283,172 @@ Cleanup complete for my-workload-9572f94f
 
 ---
 
-## Writing your own goals
+## Using different SDKs
 
-Create a new `.md` file in `goals/` and deploy it:
+The goal agent generator supports 4 SDKs. Each uses a different AI backend:
+
+### Claude SDK (default)
 
 ```bash
-cat > goals/api-health-check.md << 'EOF'
-# API Health Monitor
+export ANTHROPIC_API_KEY=sk-ant-...
 
-## Goal
-Check the health of 3 public APIs (httpbin.org, jsonplaceholder, github status)
-and produce a JSON status report.
-
-## Constraints
-- Use only Python requests library
-- Timeout: 5 seconds per API call
-- Complete within 10 minutes
-
-## Success Criteria
-- All 3 APIs checked
-- Response time recorded for each
-- Report written to output/health-report.json
-EOF
-
-haymaker deploy my-workload --config goal_file=goals/api-health-check.md --yes
+haymaker deploy my-workload \
+  --config goal_file=goals/example-file-organizer.md \
+  --config sdk=claude \
+  --yes
 ```
 
-### Tips for effective goals
+```
+Deployment started: my-workload-9572f94f
+```
 
-| Do | Don't |
-|----|-------|
-| Be specific about output format and location | Leave output undefined |
-| Set time and resource constraints | Assume unlimited resources |
-| Define measurable success criteria | Use vague "works correctly" |
-| Specify what NOT to do (constraints) | Hope the agent figures it out |
-| One goal per prompt file | Combine unrelated objectives |
+Logs show `[AUTO CLAUDE]` prefix. Uses Claude via the Anthropic SDK.
 
----
-
-## Configuration options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `goal_file` | built-in default | Path to your goal markdown |
-| `sdk` | `claude` | Execution SDK (see below) |
-| `enable_memory` | `false` | Agent learns across runs |
-| `max_turns` | `15` | Maximum agentic iterations |
-
-### SDK options
-
-The goal agent generator supports four SDKs. Each uses a different AI backend:
-
-| SDK | Best for | Auth required |
-|-----|----------|-------------|
-| `claude` | General tasks, tool use, deep reasoning | `ANTHROPIC_API_KEY` |
-| `copilot` | Code generation, git operations, dev tasks | `gh copilot` login |
-| `microsoft` | Azure workloads, structured workflows | Azure AI Foundry endpoint |
-| `mini` | Lightweight tasks, minimal dependencies | Any LLM API key via litellm |
+### GitHub Copilot SDK
 
 ```bash
-# Deploy with a specific SDK
+export GH_TOKEN=$(gh auth token)
+
 haymaker deploy my-workload \
-  --config goal_file=goals/my-goal.md \
+  --config goal_file=goals/example-file-organizer.md \
   --config sdk=copilot \
   --yes
 ```
 
+```
+Deployment started: my-workload-579017ad
+```
+
+Logs show `[AUTO COPILOT]` prefix. Uses GitHub Copilot. Requires a Copilot subscription on the GitHub account.
+
+**Auth options:** `GH_TOKEN`, `COPILOT_GITHUB_TOKEN`, or `GITHUB_TOKEN` environment variables. The SDK auto-detects the token. You can also use `gh copilot` CLI login (credentials stored in system keychain).
+
+### Microsoft Agent Framework (Azure OpenAI)
+
+```bash
+export AZURE_OPENAI_ENDPOINT=https://your-instance.openai.azure.com/
+export AZURE_OPENAI_DEPLOYMENT=gpt-5
+
+haymaker deploy my-workload \
+  --config goal_file=goals/example-file-organizer.md \
+  --config sdk=microsoft \
+  --yes
+```
+
+```
+Deployment started: my-workload-26614651
+```
+
+Logs show `[AUTO MICROSOFT]` prefix. Uses Azure OpenAI.
+
+**Auth:** Uses `DefaultAzureCredential` -- no API key needed in Azure. For local dev, run `az login` first. In Azure Container Apps, the system-assigned managed identity handles auth automatically.
+
+**Setup:** You need an Azure OpenAI resource with a model deployed. Set the endpoint and deployment name in environment variables.
+
+### Mini SDK (litellm)
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_API_KEY
+
+haymaker deploy my-workload \
+  --config goal_file=goals/example-file-organizer.md \
+  --config sdk=mini \
+  --yes
+```
+
+```
+Deployment started: my-workload-323c3fdb
+```
+
+Logs show `[AUTO MINI]` prefix. Lightweight -- uses litellm under the hood, works with any LLM provider.
+
 ---
 
-## Lifecycle reference
+## Deploy to Azure
+
+The repo includes a GitHub Actions pipeline for Azure deployment. See [Deploy to Azure](deploy) for full details.
+
+```bash
+# One-time OIDC setup
+./scripts/setup-oidc.sh your-org/your-repo
+
+# Deploy
+gh workflow run deploy.yml -f environment=dev -f location=eastus
+```
+
+The pipeline builds a container, deploys to Azure Container Apps (2 vCPU / 4GB), and runs an E2E lifecycle test:
+
+```
+workload registered                    ✅
+generator pipeline works               ✅
+deploy returned instantly              ✅
+agent is running                       ✅
+logs accessible                        ✅
+cleanup completed                      ✅
+ALL E2E TESTS PASSED                   ✅
+```
+
+---
+
+## Configuration reference
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `goal_file` | built-in default | Path to goal markdown |
+| `sdk` | `claude` | `claude`, `copilot`, `microsoft`, or `mini` |
+| `enable_memory` | `false` | Agent learns across runs |
+| `max_turns` | `15` | Maximum agentic iterations |
+
+## Lifecycle commands
 
 | Command | What it does |
 |---------|-------------|
-| `haymaker deploy my-workload --config goal_file=goals/X.md --yes` | Generate agent + execute |
+| `haymaker deploy my-workload --config goal_file=goals/X.md --yes` | Generate + run agent |
 | `haymaker status <id>` | Check agent progress |
-| `haymaker logs <id>` | View generator logs + agent stdout |
+| `haymaker logs <id>` | View generator + agent output |
 | `haymaker stop <id> --yes` | Terminate agent process |
-| `haymaker cleanup <id> --yes` | Mark complete, release resources |
+| `haymaker cleanup <id> --yes` | Release resources |
 | `haymaker list` | Show all deployments |
+
+---
+
+## Writing your own goals
+
+```bash
+cat > goals/api-monitor.md << 'EOF'
+# API Health Monitor
+
+## Goal
+Check health of 3 public APIs and produce a JSON status report.
+
+## Constraints
+- Use Python requests library
+- 5 second timeout per API
+- Complete within 10 minutes
+
+## Success Criteria
+- All 3 APIs checked
+- Response times recorded
+- Report at output/health-report.json
+EOF
+
+haymaker deploy my-workload --config goal_file=goals/api-monitor.md --yes
+```
+
+### Tips
+
+| Do | Don't |
+|----|-------|
+| Be specific about output format | Leave output undefined |
+| Set constraints | Assume unlimited resources |
+| Define measurable success criteria | Use "works correctly" |
+| One goal per file | Combine unrelated goals |
 
 ---
 
 ## Next steps
 
-- **Write goals** for your domain and deploy them
-- **Try different SDKs** to compare behavior
-- **[Deploy to Azure](deploy)** for cloud execution with bigger containers
-- **[Build a custom agent](advanced)** when you need full control over the agent code
-- **[Goal Agent Generator Guide](https://rysweet.github.io/amplihack/GOAL_AGENT_GENERATOR_GUIDE/)** for the full reference
+- [Build a custom agent](advanced) when the generator isn't enough
+- [Deploy to Azure](deploy) for cloud execution
+- [Architecture](architecture) to understand how it all connects
+- [Goal Agent Generator Guide](https://rysweet.github.io/amplihack/GOAL_AGENT_GENERATOR_GUIDE/) for full reference
