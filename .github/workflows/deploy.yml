@@ -202,15 +202,24 @@ jobs:
 
           # Poll for completion with periodic OIDC re-authentication.
           # OIDC tokens expire after 5 minutes; re-auth every 4 minutes (24 iterations × 10s).
+          # We request a FRESH token from GitHub's OIDC provider each time (the static
+          # AZURE_FEDERATED_TOKEN_FILE written by azure/login is not refreshed).
           echo "==> Waiting for E2E job..."
           for i in $(seq 1 480); do
             # Re-authenticate every 24 polls (~4 min) to avoid OIDC token expiry
             if [ $((i % 24)) -eq 1 ]; then
-              az login --service-principal \
-                --username "${{ secrets.AZURE_CLIENT_ID }}" \
-                --tenant "${{ secrets.AZURE_TENANT_ID }}" \
-                --federated-token "$(cat $AZURE_FEDERATED_TOKEN_FILE)" \
-                -o none 2>/dev/null || echo "  [warn] re-auth failed, continuing..."
+              FRESH_TOKEN=$(curl -sS \
+                -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                -H "Accept: application/json; api-version=2.0" \
+                "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
+                | jq -r '.value' 2>/dev/null) || true
+              if [ -n "$FRESH_TOKEN" ] && [ "$FRESH_TOKEN" != "null" ]; then
+                az login --service-principal \
+                  --username "${{ secrets.AZURE_CLIENT_ID }}" \
+                  --tenant "${{ secrets.AZURE_TENANT_ID }}" \
+                  --federated-token "$FRESH_TOKEN" \
+                  -o none 2>/dev/null || echo "  [warn] re-auth failed, continuing..."
+              fi
             fi
             STATUS=$(az containerapp job execution show \
               --name "haymaker-e2e-test" \

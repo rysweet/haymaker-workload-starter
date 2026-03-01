@@ -1006,9 +1006,7 @@ class TestDeployPersistsPid:
             patch.object(workload, "_generate_agent", mock_gen),
             patch("haymaker_my_workload.workload.subprocess.Popen", return_value=mock_proc),
         ):
-            dep_id = await workload.deploy(
-                DeploymentConfig(workload_name="my-workload")
-            )
+            dep_id = await workload.deploy(DeploymentConfig(workload_name="my-workload"))
 
         state = await workload.load_state(dep_id)
         assert state.metadata.get("agent_pid") == 54321
