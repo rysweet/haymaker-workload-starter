@@ -37,3 +37,7 @@ Thumbs.db
 # Secrets
 .env
 .claude/
+
+# Amplihack runtime directories (auto-generated)
+.claude/logs/
+.claude/runtime/

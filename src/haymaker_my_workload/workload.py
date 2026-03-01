@@ -146,6 +146,12 @@ class MyWorkload(WorkloadBase):
         # Launch agent as detached subprocess (returns immediately)
         self._execute_agent_detached(deployment_id, agent_dir, max_turns)
 
+        # Persist PID for cross-process status detection
+        proc = self._processes.get(deployment_id)
+        if proc:
+            state.metadata["agent_pid"] = proc.pid
+            await self.save_state(state)
+
         return deployment_id
 
     async def get_status(self, deployment_id: str) -> DeploymentState:
@@ -169,28 +175,33 @@ class MyWorkload(WorkloadBase):
                 state.completed_at = datetime.now(tz=UTC)
                 await self.save_state(state)
 
-        # If still RUNNING but no in-memory process (e.g. after restart),
-        # check the agent.log file for completion indicators.
+        # If still RUNNING but no in-memory process, use PID + log detection
         if state.status == DeploymentStatus.RUNNING and not proc:
-            agent_dir_str = (state.metadata or {}).get("agent_dir")
-            if agent_dir_str:
-                log_file = Path(agent_dir_str) / "agent.log"
-                if log_file.exists():
-                    last_line = self._read_last_line(log_file)
-                    if last_line is not None:
-                        lower = last_line.lower()
-                        if "goal achieved" in lower:
-                            state.status = DeploymentStatus.COMPLETED
-                            state.phase = "completed"
-                            state.completed_at = datetime.now(tz=UTC)
-                            await self.save_state(state)
-                        elif "exit code" in lower:
-                            # Try to extract exit code number
-                            state.status = DeploymentStatus.FAILED
-                            state.phase = "failed"
-                            state.error = f"Agent log indicates: {last_line.strip()}"
-                            state.completed_at = datetime.now(tz=UTC)
-                            await self.save_state(state)
+            pid = (state.metadata or {}).get("agent_pid")
+            process_alive = True
+
+            if pid:
+                try:
+                    os.kill(pid, 0)  # Check if process exists (sends no signal)
+                except ProcessLookupError:
+                    process_alive = False
+                except PermissionError:
+                    pass  # Process exists but we can't signal it -- assume alive
+
+            if not process_alive:
+                # Process is dead -- check logs for completion vs failure
+                resolved = self._detect_status_from_log(state)
+                if not resolved:
+                    state.status = DeploymentStatus.FAILED
+                    state.phase = "failed"
+                    state.error = "Agent process exited unexpectedly (PID no longer exists)"
+                    state.completed_at = datetime.now(tz=UTC)
+                await self.save_state(state)
+
+            elif not pid:
+                # No PID stored (legacy deployment) -- fall back to log-based detection only
+                if self._detect_status_from_log(state):
+                    await self.save_state(state)
 
         # Include agent_dir in metadata so `haymaker status` shows it
         agent_dir_str = (state.metadata or {}).get("agent_dir")
@@ -398,28 +409,52 @@ class MyWorkload(WorkloadBase):
 
         self._agent_log_files[deployment_id] = log_file
 
-        # Open log file WITHOUT context manager -- Popen needs it to stay open.
-        # Closed explicitly in _cleanup_process().
+        # Open log and error files. We duplicate the fds for the child process
+        # so that even if the parent's MyWorkload instance is garbage-collected
+        # (closing lf/ef), the child retains its own independent fd copies.
         lf = open(log_file, "w", buffering=1)  # noqa: SIM115  # line-buffered
         self._log_file_handles[deployment_id] = lf
+
+        err_file = agent_dir / "agent.err"
+        ef = open(err_file, "w", buffering=1)  # noqa: SIM115
+
+        # Create duplicate fds for the child -- survives parent GC
+        child_stdout_fd = os.dup(lf.fileno())
+        child_stderr_fd = os.dup(ef.fileno())
 
         # Strip CLAUDECODE env var to prevent "cannot launch inside
         # another Claude Code session" error in the agent subprocess
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
-        # Also capture stderr to a separate file for debugging
-        err_file = agent_dir / "agent.err"
-        ef = open(err_file, "w", buffering=1)  # noqa: SIM115
+        try:
+            proc = subprocess.Popen(
+                ["python3", "-u", "main.py"],  # -u: unbuffered stdout/stderr
+                stdout=child_stdout_fd,
+                stderr=child_stderr_fd,
+                cwd=str(agent_dir),
+                env=env,
+                start_new_session=True,
+            )
+        except OSError:
+            # Clean up all fds on Popen failure to prevent leaks
+            os.close(child_stdout_fd)
+            os.close(child_stderr_fd)
+            ef.close()
+            lf.close()
+            self._log_file_handles.pop(deployment_id, None)
+            raise
 
-        proc = subprocess.Popen(
-            ["python3", "-u", "main.py"],  # -u: unbuffered stdout/stderr
-            stdout=lf,
-            stderr=ef,
-            cwd=str(agent_dir),
-            env=env,
-            start_new_session=True,
-        )
         self._processes[deployment_id] = proc
+
+        # Close the parent's copies of the duplicated fds -- the child
+        # process has inherited its own copies via Popen.
+        os.close(child_stdout_fd)
+        os.close(child_stderr_fd)
+
+        # Close the error file handle in the parent (we don't need it).
+        # The original lf stays open in _log_file_handles for in-memory reads.
+        ef.close()
+
         self._append_log(deployment_id, f"Agent started (pid={proc.pid})")
 
     def _terminate_process(self, deployment_id: str) -> None:
@@ -451,6 +486,35 @@ class MyWorkload(WorkloadBase):
                 self._terminate_process(dep_id)
             except Exception:
                 pass
+
+    def _detect_status_from_log(self, state: DeploymentState) -> bool:
+        """Check agent.log for completion indicators and update state in-place.
+
+        Returns True if the log contained a recognized indicator and state was
+        updated, False if the log was absent, empty, or inconclusive.
+        """
+        agent_dir_str = (state.metadata or {}).get("agent_dir")
+        if not agent_dir_str:
+            return False
+        log_file = Path(agent_dir_str) / "agent.log"
+        if not log_file.exists():
+            return False
+        last_line = self._read_last_line(log_file)
+        if last_line is None:
+            return False
+        lower = last_line.lower()
+        if "goal achieved" in lower:
+            state.status = DeploymentStatus.COMPLETED
+            state.phase = "completed"
+            state.completed_at = datetime.now(tz=UTC)
+            return True
+        if "exit code" in lower:
+            state.status = DeploymentStatus.FAILED
+            state.phase = "failed"
+            state.error = f"Agent log indicates: {last_line.strip()}"
+            state.completed_at = datetime.now(tz=UTC)
+            return True
+        return False
 
     @staticmethod
     def _read_last_line(path: Path) -> str | None:
