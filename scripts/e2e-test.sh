@@ -21,7 +21,7 @@ echo "--- Step 2: generator pipeline ---"
 python3 -c "
 from pathlib import Path
 from amplihack.goal_agent_generator import PromptAnalyzer, ObjectivePlanner
-goal = PromptAnalyzer().analyze(Path('goals/example-file-organizer.md'))
+goal = PromptAnalyzer().analyze(Path('goals/e2e-quick-test.md'))
 plan = ObjectivePlanner().generate_plan(goal)
 print(f'Goal: {goal.goal[:60]}...')
 print(f'Domain: {goal.domain}, Complexity: {goal.complexity}')
@@ -35,7 +35,7 @@ echo "  RUN 1: First agent execution"
 echo "=========================================="
 
 echo "--- Step 3: deploy (run 1) ---"
-OUTPUT=$(haymaker deploy my-workload --config goal_file=goals/example-file-organizer.md --config enable_memory=true --yes 2>&1)
+OUTPUT=$(haymaker deploy my-workload --config goal_file=goals/e2e-quick-test.md --config enable_memory=true --config max_turns=3 --yes 2>&1)
 echo "$OUTPUT"
 DEP1=$(echo "$OUTPUT" | grep -oE 'my-workload-[a-f0-9]+' | head -1)
 echo "Deployment ID: $DEP1"
@@ -69,7 +69,7 @@ if [ -n "$AGENT_DIR" ]; then
   echo "Agent dir: $AGENT_DIR"
   if [ -d "$AGENT_DIR" ]; then
     ls -la "$AGENT_DIR"/output/ 2>/dev/null && echo "PASS: output directory exists" || echo "WARN: no output directory"
-    cat "$AGENT_DIR"/output/file-report.md 2>/dev/null | head -20 || true
+    cat "$AGENT_DIR"/output/result.txt 2>/dev/null || cat "$AGENT_DIR"/output/file-report.md 2>/dev/null | head -20 || true
   fi
 fi
 
@@ -78,7 +78,7 @@ python3 -c "
 from amplihack_memory import ExperienceStore
 from pathlib import Path
 store = ExperienceStore(agent_name='auto_claude', storage_path=Path.home() / '.amplihack' / 'agent-memory')
-results = store.search('file organization')
+results = store.search('file')
 print(f'Memory entries: {len(results)}')
 for r in results:
     print(f'  {r.experience_type.name}: {r.context[:60]}')
@@ -99,7 +99,7 @@ echo "  RUN 2: Second execution (memory recall)"
 echo "=========================================="
 
 echo "--- Step 8: deploy (run 2, same goal) ---"
-OUTPUT2=$(haymaker deploy my-workload --config goal_file=goals/example-file-organizer.md --config enable_memory=true --yes 2>&1)
+OUTPUT2=$(haymaker deploy my-workload --config goal_file=goals/e2e-quick-test.md --config enable_memory=true --config max_turns=3 --yes 2>&1)
 echo "$OUTPUT2"
 DEP2=$(echo "$OUTPUT2" | grep -oE 'my-workload-[a-f0-9]+' | head -1)
 echo "Deployment ID: $DEP2"
@@ -123,7 +123,7 @@ python3 -c "
 from amplihack_memory import ExperienceStore
 from pathlib import Path
 store = ExperienceStore(agent_name='auto_claude', storage_path=Path.home() / '.amplihack' / 'agent-memory')
-results = store.search('file organization')
+results = store.search('file')
 print(f'Memory entries after run 2: {len(results)}')
 stats = store.get_statistics()
 print(f'Total experiences: {stats[\"total_experiences\"]}')
