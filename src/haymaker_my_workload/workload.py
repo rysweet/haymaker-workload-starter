@@ -15,7 +15,6 @@ Configuration:
 
 from __future__ import annotations
 
-import atexit
 import logging
 import os
 import subprocess
@@ -83,7 +82,6 @@ class MyWorkload(WorkloadBase):
         self._agent_log_files: dict[str, Path] = {}
         self._log_file_handles: dict[str, IO] = {}
         self._temp_goal_files: dict[str, Path] = {}
-        atexit.register(self._kill_all_processes)
 
     async def deploy(self, config: DeploymentConfig) -> str:
         """Generate an agent from a goal prompt and execute it."""
@@ -478,14 +476,6 @@ class MyWorkload(WorkloadBase):
         lf = self._log_file_handles.pop(deployment_id, None)
         if lf and not lf.closed:
             lf.close()
-
-    def _kill_all_processes(self) -> None:
-        """atexit handler: terminate all tracked agent processes."""
-        for dep_id in list(self._processes.keys()):
-            try:
-                self._terminate_process(dep_id)
-            except Exception:
-                pass
 
     def _detect_status_from_log(self, state: DeploymentState) -> bool:
         """Check agent.log for completion indicators and update state in-place.
