@@ -200,9 +200,18 @@ jobs:
             --query name -o tsv)
           echo "Execution: $EXECUTION"
 
-          # Poll for completion
+          # Poll for completion with periodic OIDC re-authentication.
+          # OIDC tokens expire after 5 minutes; re-auth every 4 minutes (24 iterations × 10s).
           echo "==> Waiting for E2E job..."
           for i in $(seq 1 480); do
+            # Re-authenticate every 24 polls (~4 min) to avoid OIDC token expiry
+            if [ $((i % 24)) -eq 1 ]; then
+              az login --service-principal \
+                --username "${{ secrets.AZURE_CLIENT_ID }}" \
+                --tenant "${{ secrets.AZURE_TENANT_ID }}" \
+                --federated-token "$(cat $AZURE_FEDERATED_TOKEN_FILE)" \
+                -o none 2>/dev/null || echo "  [warn] re-auth failed, continuing..."
+            fi
             STATUS=$(az containerapp job execution show \
               --name "haymaker-e2e-test" \
               --resource-group "$RG_NAME" \

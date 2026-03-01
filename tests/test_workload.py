@@ -557,6 +557,63 @@ class TestExecuteAgentDetached:
         assert kwargs["start_new_session"] is True
         assert kwargs["stderr"] is not None  # Separate file for stderr
 
+    def test_popen_receives_integer_fds(self, tmp_path):
+        """Popen stdout/stderr are integer fds from os.dup(), not file objects."""
+        workload = MyWorkload(platform=_mock_platform())
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        (agent_dir / "main.py").write_text("print('hello')\n")
+
+        mock_proc = MagicMock(spec=subprocess.Popen)
+        mock_proc.pid = 42
+
+        with patch(
+            "haymaker_my_workload.workload.subprocess.Popen", return_value=mock_proc
+        ) as mock_popen:
+            workload._execute_agent_detached("dep-dup", agent_dir, max_turns=5)
+
+        _, kwargs = mock_popen.call_args
+        # os.dup() returns integers, not file objects
+        assert isinstance(kwargs["stdout"], int), "stdout should be an int fd from os.dup()"
+        assert isinstance(kwargs["stderr"], int), "stderr should be an int fd from os.dup()"
+
+    def test_error_file_closed_after_popen(self, tmp_path):
+        """The error file handle is closed in the parent after Popen returns."""
+        workload = MyWorkload(platform=_mock_platform())
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        (agent_dir / "main.py").write_text("print('hello')\n")
+
+        mock_proc = MagicMock(spec=subprocess.Popen)
+        mock_proc.pid = 55
+
+        with patch("haymaker_my_workload.workload.subprocess.Popen", return_value=mock_proc):
+            workload._execute_agent_detached("dep-ef", agent_dir, max_turns=5)
+
+        # The error file handle should NOT be tracked (closed immediately)
+        # Only the log file handle is tracked
+        assert "dep-ef" in workload._log_file_handles
+        assert not workload._log_file_handles["dep-ef"].closed
+
+    def test_popen_failure_cleans_up_fds(self, tmp_path):
+        """When Popen raises OSError, all file descriptors are closed."""
+        workload = MyWorkload(platform=_mock_platform())
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        (agent_dir / "main.py").write_text("print('hello')\n")
+
+        with patch(
+            "haymaker_my_workload.workload.subprocess.Popen",
+            side_effect=OSError("exec failed"),
+        ):
+            with pytest.raises(OSError, match="exec failed"):
+                workload._execute_agent_detached("dep-fail", agent_dir, max_turns=5)
+
+        # Log file handle should be cleaned up
+        assert "dep-fail" not in workload._log_file_handles
+        # Process should not be tracked
+        assert "dep-fail" not in workload._processes
+
 
 class TestTerminateProcess:
     """Tests for _terminate_process with SIGTERM/SIGKILL escalation."""
@@ -767,6 +824,194 @@ class TestValidateConfigEdgeCases:
         config = DeploymentConfig(workload_name="my-workload")
         errors = await workload.validate_config(config)
         assert errors == []
+
+
+class TestPidBasedStatusDetection:
+    """Test PID-based process detection in get_status() (Problem 2 fix)."""
+
+    async def test_dead_pid_with_goal_achieved_log(self, tmp_path):
+        """When PID is dead and log says 'goal achieved', status is COMPLETED."""
+        workload = MyWorkload(platform=_mock_platform())
+
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        log_file = agent_dir / "agent.log"
+        log_file.write_text("Starting...\nGoal achieved!\n")
+
+        state = DeploymentState(
+            deployment_id="test-pid-achieved",
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir), "agent_pid": 999999},
+        )
+        await workload.save_state(state)
+
+        # Mock os.kill to raise ProcessLookupError (PID is dead)
+        with patch("haymaker_my_workload.workload.os.kill", side_effect=ProcessLookupError):
+            result = await workload.get_status("test-pid-achieved")
+
+        assert result.status == DeploymentStatus.COMPLETED
+        assert result.phase == "completed"
+
+    async def test_dead_pid_with_exit_code_log(self, tmp_path):
+        """When PID is dead and log says 'exit code', status is FAILED."""
+        workload = MyWorkload(platform=_mock_platform())
+
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        log_file = agent_dir / "agent.log"
+        log_file.write_text("Starting...\nexit code 1\n")
+
+        state = DeploymentState(
+            deployment_id="test-pid-exit",
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir), "agent_pid": 999999},
+        )
+        await workload.save_state(state)
+
+        with patch("haymaker_my_workload.workload.os.kill", side_effect=ProcessLookupError):
+            result = await workload.get_status("test-pid-exit")
+
+        assert result.status == DeploymentStatus.FAILED
+        assert "exit code" in result.error.lower()
+
+    async def test_dead_pid_with_empty_log(self, tmp_path):
+        """When PID is dead and log is empty, status is FAILED with descriptive error."""
+        workload = MyWorkload(platform=_mock_platform())
+
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        log_file = agent_dir / "agent.log"
+        log_file.write_text("")  # Empty log
+
+        state = DeploymentState(
+            deployment_id="test-pid-empty",
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir), "agent_pid": 999999},
+        )
+        await workload.save_state(state)
+
+        with patch("haymaker_my_workload.workload.os.kill", side_effect=ProcessLookupError):
+            result = await workload.get_status("test-pid-empty")
+
+        assert result.status == DeploymentStatus.FAILED
+        assert "PID no longer exists" in result.error
+
+    async def test_alive_pid_stays_running(self, tmp_path):
+        """When PID is alive, status stays RUNNING."""
+        workload = MyWorkload(platform=_mock_platform())
+
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+
+        state = DeploymentState(
+            deployment_id="test-pid-alive",
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir), "agent_pid": 999999},
+        )
+        await workload.save_state(state)
+
+        # os.kill(pid, 0) succeeds -- process is alive
+        with patch("haymaker_my_workload.workload.os.kill"):
+            result = await workload.get_status("test-pid-alive")
+
+        assert result.status == DeploymentStatus.RUNNING
+
+    async def test_permission_error_assumes_alive(self, tmp_path):
+        """When os.kill raises PermissionError, process is assumed alive."""
+        workload = MyWorkload(platform=_mock_platform())
+
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+
+        state = DeploymentState(
+            deployment_id="test-pid-perm",
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir), "agent_pid": 999999},
+        )
+        await workload.save_state(state)
+
+        with patch("haymaker_my_workload.workload.os.kill", side_effect=PermissionError):
+            result = await workload.get_status("test-pid-perm")
+
+        assert result.status == DeploymentStatus.RUNNING
+
+    async def test_legacy_no_pid_uses_log_detection(self, tmp_path):
+        """Legacy deployments without agent_pid fall back to log-based detection."""
+        workload = MyWorkload(platform=_mock_platform())
+
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        log_file = agent_dir / "agent.log"
+        log_file.write_text("Starting...\nGoal achieved!\n")
+
+        state = DeploymentState(
+            deployment_id="test-legacy",
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir)},  # No agent_pid
+        )
+        await workload.save_state(state)
+
+        result = await workload.get_status("test-legacy")
+        assert result.status == DeploymentStatus.COMPLETED
+
+    async def test_legacy_no_pid_no_log_stays_running(self, tmp_path):
+        """Legacy deployment with no PID and no log stays RUNNING."""
+        workload = MyWorkload(platform=_mock_platform())
+
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        # No agent.log
+
+        state = DeploymentState(
+            deployment_id="test-legacy-nolog",
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir)},  # No agent_pid
+        )
+        await workload.save_state(state)
+
+        result = await workload.get_status("test-legacy-nolog")
+        assert result.status == DeploymentStatus.RUNNING
+
+
+class TestDeployPersistsPid:
+    """Test that deploy() stores the agent PID in metadata."""
+
+    async def test_pid_stored_in_metadata(self, tmp_path):
+        """After deploy, the state metadata contains agent_pid."""
+        workload = MyWorkload(platform=_mock_platform())
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        (agent_dir / "main.py").write_text("import sys; print('OK'); sys.exit(0)\n")
+
+        mock_gen = AsyncMock(return_value=agent_dir)
+        mock_proc = MagicMock(spec=subprocess.Popen)
+        mock_proc.pid = 54321
+        mock_proc.poll.return_value = None  # Still running
+
+        with (
+            patch.object(workload, "_generate_agent", mock_gen),
+            patch("haymaker_my_workload.workload.subprocess.Popen", return_value=mock_proc),
+        ):
+            dep_id = await workload.deploy(
+                DeploymentConfig(workload_name="my-workload")
+            )
+
+        state = await workload.load_state(dep_id)
+        assert state.metadata.get("agent_pid") == 54321
 
 
 @pytest.mark.integration
