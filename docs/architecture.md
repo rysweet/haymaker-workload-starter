@@ -101,13 +101,19 @@ deploy() reads goal prompt, runs amplihack generator pipeline
 Generator creates agent directory (main.py, config.json, skills/)
     │
     ▼
-Workload launches main.py as detached subprocess
+Workload launches main.py as detached subprocess (PID stored in state)
     │
     ▼
-Agent runs autonomously, logs to agent.log
+Agent runs autonomously, logs to agent.log (via os.dup'd fd)
     │
     ▼
-User queries: haymaker status <id> → checks process + persisted state
+User queries: haymaker status <id>
+    │
+    ▼
+Status detection (priority order):
+  1. In-memory process handle (proc.poll()) — same CLI session
+  2. PID liveness (os.kill(pid, 0)) — after CLI restart
+  3. agent.log parsing ("goal achieved" / "exit code") — fallback
 ```
 
 ## State model
@@ -120,7 +126,7 @@ class DeploymentState:
     phase: str                  # "initializing", "collecting", "completed"
     started_at: datetime
     config: dict                # workload-specific settings
-    metadata: dict              # runtime metrics
+    metadata: dict              # runtime info (agent_dir, agent_pid, sdk, ...)
 ```
 
 Statuses: `PENDING` → `RUNNING` ⇄ `STOPPED` → `CLEANING_UP` → `COMPLETED` / `FAILED`

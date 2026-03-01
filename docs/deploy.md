@@ -95,3 +95,7 @@ GitHub Actions  ──OIDC token──>  Azure AD  ──validates──>  grant
 ```
 
 No service principal passwords are stored in GitHub. Azure trusts GitHub's OIDC tokens based on the federated credential configuration created by the setup script.
+
+### Long-running E2E and token refresh
+
+OIDC tokens expire after 5 minutes, but the E2E verification job polls for up to 80 minutes. The polling loop automatically requests fresh tokens from GitHub's OIDC provider every ~4 minutes using `ACTIONS_ID_TOKEN_REQUEST_URL` and re-authenticates with `az login --service-principal --federated-token`. If token refresh fails, the loop continues gracefully.

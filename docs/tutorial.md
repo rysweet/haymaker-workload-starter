@@ -120,7 +120,7 @@ haymaker deploy my-workload \
 Deployment started: my-workload-9572f94f
 ```
 
-Deploy returns in **<1 second**. The agent runs as a detached background process. What happened:
+Deploy returns in **<1 second**. The agent runs as a detached background process with its PID stored in the deployment state for reliable status detection. What happened:
 
 ```bash
 haymaker logs my-workload-9572f94f

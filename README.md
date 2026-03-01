@@ -61,7 +61,7 @@ haymaker-workload-starter/
 │   ├── __init__.py                    # Public API
 │   └── workload.py                    # Goal-agent runtime
 ├── tests/
-│   └── test_workload.py               # 56 tests
+│   └── test_workload.py               # 68 tests
 ├── docs/                              # GitHub Pages docs site
 ├── infra/main.bicep                   # Azure Container Apps (Bicep)
 ├── scripts/
@@ -114,7 +114,7 @@ pip install -e ".[dev]"
 # Or use the Makefile shortcut:
 make install
 
-pytest -q               # 56 tests
+pytest -q               # 68 tests
 ruff check src/ tests/  # lint
 ```
 
