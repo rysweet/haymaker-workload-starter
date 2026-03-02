@@ -1,0 +1,16 @@
+# Exclude dev/IDE settings that interfere with headless container operation.
+# The project .claude/settings.json has amplihack hooks that try to run
+# interactive tools, causing the claude CLI to hang in containers.
+.claude/settings.json
+.claude/settings.local.json
+
+# Exclude large/unnecessary directories from the image
+.git
+.github
+.venv
+.pytest_cache
+.ruff_cache
+__pycache__
+*.pyc
+.haymaker/agents
+output
