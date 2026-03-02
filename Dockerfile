@@ -39,7 +39,7 @@ RUN pip install --no-cache-dir --no-deps .
 # Create a minimal .claude/settings.json for headless container operation.
 # The project settings.json is excluded via .dockerignore because its hooks
 # reference interactive tools that don't work in containers.
-RUN echo '{"permissions":{"defaultMode":"bypassPermissions"}}' > /app/.claude/settings.json
+RUN mkdir -p /app/.claude && echo '{"permissions":{"defaultMode":"bypassPermissions"}}' > /app/.claude/settings.json
 
 # Include E2E test script (used by CI to verify the deployment)
 COPY scripts/e2e-test.sh /usr/local/bin/haymaker-e2e-test
