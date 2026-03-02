@@ -17,8 +17,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN npm install -g @anthropic-ai/claude-code \
     && claude --version
 
-# Ensure HOME is set (claude needs it for config/cache)
+# Ensure HOME is set and skip Claude Code onboarding/telemetry in container
 ENV HOME=/root
+ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+
+# Pre-create Claude config to skip first-run onboarding prompts
+RUN mkdir -p /root/.claude && echo '{"hasCompletedOnboarding":true}' > /root/.claude/settings.json
 
 # Install agent-haymaker platform and amplihack from GitHub (not yet on PyPI)
 # Install deps sequentially to avoid resolver conflicts
