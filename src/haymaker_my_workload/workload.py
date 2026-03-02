@@ -41,7 +41,9 @@ from agent_haymaker.workloads.platform import Platform
 
 logger = logging.getLogger(__name__)
 
-_TERMINAL_STATES = frozenset({DeploymentStatus.COMPLETED, DeploymentStatus.FAILED})
+_TERMINAL_STATES = frozenset(
+    {DeploymentStatus.COMPLETED, DeploymentStatus.FAILED, DeploymentStatus.STOPPED}
+)
 _MAX_LOG_LINES = 10_000
 _VALID_SDKS = ("claude", "copilot", "microsoft", "mini")
 
@@ -311,7 +313,12 @@ class MyWorkload(WorkloadBase):
             errors.append(f"sdk must be one of: {', '.join(_VALID_SDKS)} (got '{sdk}')")
 
         max_turns = wc.get("max_turns", _DEFAULT_MAX_TURNS)
-        if not isinstance(max_turns, int) or max_turns < 1 or max_turns > 100:
+        if (
+            isinstance(max_turns, bool)
+            or not isinstance(max_turns, int)
+            or max_turns < 1
+            or max_turns > 100
+        ):
             errors.append("max_turns must be an integer between 1 and 100")
 
         enable_memory = wc.get("enable_memory", _DEFAULT_ENABLE_MEMORY)
