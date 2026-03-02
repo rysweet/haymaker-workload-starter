@@ -13,6 +13,21 @@ echo "=== Haymaker Goal-Agent FULL E2E Test ==="
 echo "Started: $(date -u)"
 echo ""
 
+echo "--- Step 0: environment diagnostics ---"
+echo "HOME=$HOME"
+echo "PATH=$PATH"
+echo "ANTHROPIC_API_KEY set: $([ -n "$ANTHROPIC_API_KEY" ] && echo yes || echo no)"
+echo "CLAUDECODE=${CLAUDECODE:-<unset>}"
+echo "Python: $(python3 --version 2>&1)"
+echo "Node: $(node --version 2>&1 || echo 'NOT INSTALLED')"
+echo "Claude: $(claude --version 2>&1 || echo 'NOT INSTALLED')"
+echo "Memory: $(python3 -c 'from pathlib import Path; print(Path.home() / ".amplihack" / "agent-memory")' 2>&1)"
+echo "Disk: $(df -h /app 2>/dev/null | tail -1 || echo 'unknown')"
+echo "RAM: $(free -h 2>/dev/null | grep Mem || echo 'unknown')"
+ls -la /app/.claude/ 2>/dev/null || echo "/app/.claude/ does not exist"
+ls -la "$HOME/.amplihack/.claude/tools/amplihack/hooks/" 2>/dev/null || echo "amplihack hooks not found"
+echo ""
+
 echo "--- Step 1: workload list ---"
 haymaker workload list
 echo "PASS: workload registered"
@@ -46,6 +61,52 @@ if [ -z "$DEP1" ]; then
 fi
 echo "PASS: deploy returned instantly"
 
+echo "--- Step 3.5: agent diagnostics ---"
+AGENT_DIR_PATH=$(python3 -c "
+import json; from pathlib import Path
+for f in sorted(Path.home().glob('.haymaker/state/${DEP1}*.json')):
+    d = json.loads(f.read_text())
+    print(d.get('metadata',{}).get('agent_dir',''))
+" 2>/dev/null)
+echo "Agent dir: $AGENT_DIR_PATH"
+if [ -n "$AGENT_DIR_PATH" ]; then
+  echo "Agent dir contents:"
+  ls -la "$AGENT_DIR_PATH/" 2>/dev/null || echo "  (not found)"
+  echo "main.py first 5 lines:"
+  head -5 "$AGENT_DIR_PATH/main.py" 2>/dev/null || echo "  (not found)"
+  echo "Agent PID:"
+  python3 -c "
+import json; from pathlib import Path
+for f in sorted(Path.home().glob('.haymaker/state/${DEP1}*.json')):
+    d = json.loads(f.read_text())
+    print(f'PID: {d.get(\"metadata\",{}).get(\"agent_pid\",\"NOT SET\")}')
+    print(f'Status: {d.get(\"status\")}')
+" 2>/dev/null
+  echo "agent.log size: $(wc -c < "$AGENT_DIR_PATH/agent.log" 2>/dev/null || echo 0) bytes"
+  echo "agent.err size: $(wc -c < "$AGENT_DIR_PATH/agent.err" 2>/dev/null || echo 0) bytes"
+  sleep 5
+  echo "agent.log after 5s: $(wc -c < "$AGENT_DIR_PATH/agent.log" 2>/dev/null || echo 0) bytes"
+  echo "agent.err after 5s:"
+  cat "$AGENT_DIR_PATH/agent.err" 2>/dev/null | head -20 || echo "  (empty)"
+  echo "agent.log after 5s:"
+  cat "$AGENT_DIR_PATH/agent.log" 2>/dev/null | head -20 || echo "  (empty)"
+  echo "Process alive check:"
+  python3 -c "
+import json, os; from pathlib import Path
+for f in sorted(Path.home().glob('.haymaker/state/${DEP1}*.json')):
+    d = json.loads(f.read_text())
+    pid = d.get('metadata',{}).get('agent_pid')
+    if pid:
+        try:
+            os.kill(pid, 0)
+            print(f'PID {pid}: ALIVE')
+        except ProcessLookupError:
+            print(f'PID {pid}: DEAD')
+        except PermissionError:
+            print(f'PID {pid}: ALIVE (permission denied)')
+" 2>/dev/null
+fi
+
 echo "--- Step 4: wait for agent to complete (polling every 60s, no limit) ---"
 ATTEMPT=0
 while true; do
@@ -55,6 +116,11 @@ while true; do
   STATUS=$(echo "$STATUS_OUTPUT" | grep "Status:" | awk '{print $2}')
   PHASE=$(echo "$STATUS_OUTPUT" | grep "Phase:" | awk '{print $2}')
   echo "  [$ATTEMPT] status=$STATUS phase=$PHASE ($(date -u +%H:%M:%S))"
+  # On first few polls, dump agent log progress
+  if [ "$ATTEMPT" -le 3 ] && [ -n "$AGENT_DIR_PATH" ]; then
+    echo "    agent.log: $(wc -c < "$AGENT_DIR_PATH/agent.log" 2>/dev/null || echo 0) bytes"
+    echo "    agent.err: $(cat "$AGENT_DIR_PATH/agent.err" 2>/dev/null | head -3)"
+  fi
   if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ]; then
     break
   fi
