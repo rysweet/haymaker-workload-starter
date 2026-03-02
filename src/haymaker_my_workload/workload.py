@@ -27,10 +27,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO
 
+from agent_haymaker.events import (
+    DEPLOYMENT_COMPLETED,
+    DEPLOYMENT_FAILED,
+    DEPLOYMENT_LOG,
+    DEPLOYMENT_STARTED,
+    DEPLOYMENT_STOPPED,
+)
 from agent_haymaker.workloads.base import (
     DeploymentNotFoundError,
     WorkloadBase,
 )
+from agent_haymaker.workloads.event_helpers import EventEmitterMixin
 from agent_haymaker.workloads.models import (
     CleanupReport,
     DeploymentConfig,
@@ -73,7 +81,7 @@ Process sample data items and produce a summary report.
 """
 
 
-class MyWorkload(WorkloadBase):
+class MyWorkload(WorkloadBase, EventEmitterMixin):
     """Workload that generates and runs goal-seeking agents from prompts.
 
     Customize by writing goal markdown files in a goals/ directory.
@@ -108,29 +116,31 @@ class MyWorkload(WorkloadBase):
         enable_memory = config.workload_config.get("enable_memory", _DEFAULT_ENABLE_MEMORY)
 
         self._logs[deployment_id] = []
-        self._append_log(deployment_id, f"Starting deployment {deployment_id}")
+        await self._append_log_async(deployment_id, f"Starting deployment {deployment_id}")
 
         # Resolve or create goal file
         if goal_file:
             goal_path = self._resolve_goal_path(goal_file)
-            self._append_log(deployment_id, f"Using goal: {goal_path}")
+            await self._append_log_async(deployment_id, f"Using goal: {goal_path}")
         else:
             fd, tmp_path = tempfile.mkstemp(prefix=f"haymaker-{deployment_id}-", suffix=".md")
             goal_path = Path(tmp_path)
             with os.fdopen(fd, "w") as f:
                 f.write(_DEFAULT_GOAL)
             self._temp_goal_files[deployment_id] = goal_path
-            self._append_log(deployment_id, "Using default goal (no goal_file specified)")
+            await self._append_log_async(
+                deployment_id, "Using default goal (no goal_file specified)"
+            )
 
         # Generate the agent
-        self._append_log(deployment_id, "Generating agent from goal prompt...")
+        await self._append_log_async(deployment_id, "Generating agent from goal prompt...")
         agent_dir = await self._generate_agent(
             deployment_id=deployment_id,
             goal_path=goal_path,
             sdk=sdk,
             enable_memory=enable_memory,
         )
-        self._append_log(deployment_id, f"Agent generated in {agent_dir}")
+        await self._append_log_async(deployment_id, f"Agent generated in {agent_dir}")
 
         # Read goal for metadata
         goal_text = goal_path.read_text()
@@ -151,6 +161,16 @@ class MyWorkload(WorkloadBase):
             },
         )
         await self.save_state(state)
+
+        try:
+            await self.emit_event(
+                DEPLOYMENT_STARTED,
+                deployment_id,
+                goal_summary=goal_summary,
+                sdk=sdk,
+            )
+        except Exception:
+            logger.debug("Failed to emit DEPLOYMENT_STARTED event", exc_info=True)
 
         # Launch agent as detached subprocess (returns immediately)
         self._execute_agent_detached(deployment_id, agent_dir)
@@ -177,10 +197,18 @@ class MyWorkload(WorkloadBase):
                 if rc == 0:
                     state.status = DeploymentStatus.COMPLETED
                     state.phase = "completed"
+                    try:
+                        await self.emit_event(DEPLOYMENT_COMPLETED, deployment_id)
+                    except Exception:
+                        logger.debug("Failed to emit DEPLOYMENT_COMPLETED event", exc_info=True)
                 else:
                     state.status = DeploymentStatus.FAILED
                     state.phase = "failed"
                     state.error = f"Agent exited with code {rc}"
+                    try:
+                        await self.emit_event(DEPLOYMENT_FAILED, deployment_id, error=state.error)
+                    except Exception:
+                        logger.debug("Failed to emit DEPLOYMENT_FAILED event", exc_info=True)
                 state.completed_at = datetime.now(tz=UTC)
                 await self.save_state(state)
 
@@ -206,6 +234,13 @@ class MyWorkload(WorkloadBase):
                     state.error = "Agent process exited unexpectedly (PID no longer exists)"
                     state.completed_at = datetime.now(tz=UTC)
                 await self.save_state(state)
+                try:
+                    if state.status == DeploymentStatus.COMPLETED:
+                        await self.emit_event(DEPLOYMENT_COMPLETED, deployment_id)
+                    elif state.status == DeploymentStatus.FAILED:
+                        await self.emit_event(DEPLOYMENT_FAILED, deployment_id, error=state.error)
+                except Exception:
+                    logger.debug("Failed to emit terminal state event", exc_info=True)
 
             elif not pid:
                 # No PID stored (legacy deployment) -- fall back to log-based detection only
@@ -227,12 +262,18 @@ class MyWorkload(WorkloadBase):
             return False
 
         self._terminate_process(deployment_id)
-        self._append_log(deployment_id, "Agent process terminated")
+        await self._append_log_async(deployment_id, "Agent process terminated")
 
         state.status = DeploymentStatus.STOPPED
         state.phase = "stopped"
         state.stopped_at = datetime.now(tz=UTC)
         await self.save_state(state)
+
+        try:
+            await self.emit_event(DEPLOYMENT_STOPPED, deployment_id)
+        except Exception:
+            logger.debug("Failed to emit DEPLOYMENT_STOPPED event", exc_info=True)
+
         return True
 
     async def start(self, deployment_id: str) -> bool:
@@ -264,6 +305,11 @@ class MyWorkload(WorkloadBase):
         state.phase = "cleaned_up"
         state.stopped_at = datetime.now(tz=UTC)
         await self.save_state(state)
+
+        try:
+            await self.emit_event(DEPLOYMENT_STOPPED, deployment_id)
+        except Exception:
+            logger.debug("Failed to emit DEPLOYMENT_STOPPED event", exc_info=True)
 
         return CleanupReport(
             deployment_id=deployment_id,
@@ -371,14 +417,14 @@ class MyWorkload(WorkloadBase):
 
         analyzer = PromptAnalyzer()
         goal_def = analyzer.analyze(goal_path)
-        self._append_log(
+        await self._append_log_async(
             deployment_id,
             f"Goal analyzed: domain={goal_def.domain}, complexity={goal_def.complexity}",
         )
 
         planner = ObjectivePlanner()
         plan = planner.generate_plan(goal_def)
-        self._append_log(
+        await self._append_log_async(
             deployment_id,
             f"Execution plan: {len(plan.phases)} phases, est. {plan.total_estimated_duration}",
         )
@@ -387,7 +433,7 @@ class MyWorkload(WorkloadBase):
         synthesis = synthesizer.synthesize_with_sdk_tools(plan, sdk=sdk)
         skills = synthesis.get("skills", [])
         sdk_tools = synthesis.get("sdk_tools", [])
-        self._append_log(
+        await self._append_log_async(
             deployment_id,
             f"Matched {len(skills)} skills, {len(sdk_tools)} SDK tools",
         )
@@ -406,7 +452,7 @@ class MyWorkload(WorkloadBase):
         output_dir = Path(f".haymaker/agents/{deployment_id}")
         packager = GoalAgentPackager(output_dir=output_dir)
         agent_dir = packager.package(bundle)
-        self._append_log(deployment_id, "Agent bundle packaged")
+        await self._append_log_async(deployment_id, "Agent bundle packaged")
 
         return agent_dir
 
@@ -543,6 +589,14 @@ class MyWorkload(WorkloadBase):
                 return last
         except OSError:
             return None
+
+    async def _append_log_async(self, deployment_id: str, message: str) -> None:
+        """Append a log line and emit a DEPLOYMENT_LOG event."""
+        self._append_log(deployment_id, message)
+        try:
+            await self.emit_event(DEPLOYMENT_LOG, deployment_id, line=message, level="INFO")
+        except Exception:
+            logger.debug("Failed to emit DEPLOYMENT_LOG event", exc_info=True)
 
     def _append_log(self, deployment_id: str, message: str) -> None:
         ts = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
