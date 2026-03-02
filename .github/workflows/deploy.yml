@@ -201,11 +201,12 @@ jobs:
           echo "Execution: $EXECUTION"
 
           # Poll for completion with periodic OIDC re-authentication.
-          # No timeout -- runs until the container job finishes.
+          # Timeout after MAX_POLLS × 10s (360 × 10s = 1 hour).
           # OIDC tokens expire after 5 minutes; re-auth every 4 minutes (24 polls × 10s).
-          echo "==> Waiting for E2E job..."
+          MAX_POLLS=360
+          echo "==> Waiting for E2E job (max ${MAX_POLLS} polls / ~1 hour)..."
           POLL=0
-          while true; do
+          while [ "$POLL" -lt "$MAX_POLLS" ]; do
             POLL=$((POLL + 1))
             # Re-authenticate every 24 polls (~4 min) to avoid OIDC token expiry
             if [ $((POLL % 24)) -eq 1 ]; then
@@ -233,6 +234,11 @@ jobs:
             fi
             sleep 10
           done
+
+          if [ "$POLL" -ge "$MAX_POLLS" ] && [ "$STATUS" != "Succeeded" ] && [ "$STATUS" != "Failed" ]; then
+            echo "ERROR: Polling timed out after $MAX_POLLS polls (~1 hour). Last status: $STATUS"
+            exit 1
+          fi
 
           # Show logs
           echo "==> E2E logs:"
