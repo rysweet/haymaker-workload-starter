@@ -128,10 +128,6 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               secretRef: 'anthropic-api-key'
             }
             {
-              name: 'CLAUDECODE'
-              value: ''
-            }
-            {
               name: 'AZURE_OPENAI_ENDPOINT'
               value: azureOpenAiEndpoint
             }
