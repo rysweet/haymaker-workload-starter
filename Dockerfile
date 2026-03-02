@@ -21,14 +21,15 @@ RUN npm install -g @anthropic-ai/claude-code \
 ENV HOME=/root
 ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
-# Pre-create Claude config to skip first-run onboarding prompts
-RUN mkdir -p /root/.claude && echo '{"hasCompletedOnboarding":true}' > /root/.claude/settings.json
-
 # Install agent-haymaker platform and amplihack from GitHub (not yet on PyPI)
 # Install deps sequentially to avoid resolver conflicts
 RUN pip install --no-cache-dir "agent-haymaker @ git+https://github.com/rysweet/agent-haymaker.git" && \
     pip install --no-cache-dir "amplihack @ git+https://github.com/rysweet/amplihack.git" && \
     pip install --no-cache-dir --no-deps "amplihack-memory-lib @ git+https://github.com/rysweet/amplihack-memory-lib.git"
+
+# Run amplihack install to set up hooks, agents, and tools at $HOME/.amplihack/
+# This creates the directory structure that .claude/settings.json hooks reference.
+RUN python -m amplihack install
 
 # Install this workload
 COPY . .
