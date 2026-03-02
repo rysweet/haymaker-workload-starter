@@ -1,6 +1,5 @@
 """Tests for the goal-agent workload."""
 
-import asyncio
 import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -142,8 +141,8 @@ class TestDeploy:
             config = DeploymentConfig(workload_name="my-workload")
             dep_id = await workload.deploy(config)
             assert dep_id.startswith("my-workload-")
-            await asyncio.sleep(0.5)
             state = await workload.get_status(dep_id)
+            # Agent may still be running or already completed (mocked subprocess)
             assert state.status in (DeploymentStatus.RUNNING, DeploymentStatus.COMPLETED)
 
     async def test_deploy_with_goal_file(self, setup, tmp_path):
@@ -519,7 +518,7 @@ class TestExecuteAgentDetached:
         mock_proc.pid = 12345
 
         with patch("haymaker_my_workload.workload.subprocess.Popen", return_value=mock_proc):
-            workload._execute_agent_detached("dep-1", agent_dir, max_turns=10)
+            workload._execute_agent_detached("dep-1", agent_dir)
 
         assert "dep-1" in workload._processes
         assert workload._processes["dep-1"] is mock_proc
@@ -534,7 +533,7 @@ class TestExecuteAgentDetached:
         # No main.py
 
         with pytest.raises(FileNotFoundError, match="Agent entry point not found"):
-            workload._execute_agent_detached("dep-2", agent_dir, max_turns=5)
+            workload._execute_agent_detached("dep-2", agent_dir)
 
     def test_popen_called_with_correct_args(self, tmp_path):
         """Verify the subprocess.Popen call arguments."""
@@ -549,7 +548,7 @@ class TestExecuteAgentDetached:
         with patch(
             "haymaker_my_workload.workload.subprocess.Popen", return_value=mock_proc
         ) as mock_popen:
-            workload._execute_agent_detached("dep-3", agent_dir, max_turns=20)
+            workload._execute_agent_detached("dep-3", agent_dir)
 
         args, kwargs = mock_popen.call_args
         assert args[0] == ["python3", "-u", "main.py"]
@@ -570,7 +569,7 @@ class TestExecuteAgentDetached:
         with patch(
             "haymaker_my_workload.workload.subprocess.Popen", return_value=mock_proc
         ) as mock_popen:
-            workload._execute_agent_detached("dep-dup", agent_dir, max_turns=5)
+            workload._execute_agent_detached("dep-dup", agent_dir)
 
         _, kwargs = mock_popen.call_args
         # os.dup() returns integers, not file objects
@@ -588,7 +587,7 @@ class TestExecuteAgentDetached:
         mock_proc.pid = 55
 
         with patch("haymaker_my_workload.workload.subprocess.Popen", return_value=mock_proc):
-            workload._execute_agent_detached("dep-ef", agent_dir, max_turns=5)
+            workload._execute_agent_detached("dep-ef", agent_dir)
 
         # The error file handle should NOT be tracked (closed immediately)
         # Only the log file handle is tracked
@@ -607,7 +606,7 @@ class TestExecuteAgentDetached:
             side_effect=OSError("exec failed"),
         ):
             with pytest.raises(OSError, match="exec failed"):
-                workload._execute_agent_detached("dep-fail", agent_dir, max_turns=5)
+                workload._execute_agent_detached("dep-fail", agent_dir)
 
         # Log file handle should be cleaned up
         assert "dep-fail" not in workload._log_file_handles
