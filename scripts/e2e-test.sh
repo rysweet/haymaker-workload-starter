@@ -111,15 +111,16 @@ for f in sorted(Path.home().glob('.haymaker/state/${DEP1}*.json')):
 " 2>/dev/null
 fi
 
-echo "--- Step 4: wait for agent to complete (polling every 60s, no limit) ---"
+echo "--- Step 4: wait for agent to complete (polling every 60s, max 120 attempts / ~2 hours) ---"
+MAX_ATTEMPTS=120
 ATTEMPT=0
-while true; do
+while [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; do
   ATTEMPT=$((ATTEMPT + 1))
   sleep 60
   STATUS_OUTPUT=$(haymaker status "$DEP1" 2>&1)
   STATUS=$(echo "$STATUS_OUTPUT" | grep "Status:" | awk '{print $2}')
   PHASE=$(echo "$STATUS_OUTPUT" | grep "Phase:" | awk '{print $2}')
-  echo "  [$ATTEMPT] status=$STATUS phase=$PHASE ($(date -u +%H:%M:%S))"
+  echo "  [$ATTEMPT/$MAX_ATTEMPTS] status=$STATUS phase=$PHASE ($(date -u +%H:%M:%S))"
   # On first few polls, dump agent log progress
   if [ "$ATTEMPT" -le 3 ] && [ -n "$AGENT_DIR_PATH" ]; then
     echo "    agent.log: $(wc -c < "$AGENT_DIR_PATH/agent.log" 2>/dev/null || echo 0) bytes"
@@ -129,6 +130,11 @@ while true; do
     break
   fi
 done
+
+if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ] && [ "$STATUS" != "completed" ] && [ "$STATUS" != "failed" ]; then
+  echo "FAIL: Run 1 polling timed out after $MAX_ATTEMPTS attempts (~2 hours). Last status=$STATUS"
+  exit 1
+fi
 
 echo "--- Step 5: show logs ---"
 haymaker logs "$DEP1" 2>&1 | tail -30 || true
@@ -178,19 +184,25 @@ echo "$OUTPUT2"
 DEP2=$(echo "$OUTPUT2" | grep -oE 'my-workload-[a-f0-9]+' | head -1)
 echo "Deployment ID: $DEP2"
 
-echo "--- Step 9: wait for run 2 to complete ---"
+echo "--- Step 9: wait for run 2 to complete (polling every 60s, max 120 attempts / ~2 hours) ---"
+MAX_ATTEMPTS=120
 ATTEMPT=0
-while true; do
+while [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; do
   ATTEMPT=$((ATTEMPT + 1))
   sleep 60
   STATUS_OUTPUT2=$(haymaker status "$DEP2" 2>&1)
   STATUS2=$(echo "$STATUS_OUTPUT2" | grep "Status:" | awk '{print $2}')
   PHASE2=$(echo "$STATUS_OUTPUT2" | grep "Phase:" | awk '{print $2}')
-  echo "  [$ATTEMPT] status=$STATUS2 phase=$PHASE2 ($(date -u +%H:%M:%S))"
+  echo "  [$ATTEMPT/$MAX_ATTEMPTS] status=$STATUS2 phase=$PHASE2 ($(date -u +%H:%M:%S))"
   if [ "$STATUS2" = "completed" ] || [ "$STATUS2" = "failed" ]; then
     break
   fi
 done
+
+if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ] && [ "$STATUS2" != "completed" ] && [ "$STATUS2" != "failed" ]; then
+  echo "FAIL: Run 2 polling timed out after $MAX_ATTEMPTS attempts (~2 hours). Last status=$STATUS2"
+  exit 1
+fi
 
 echo "--- Step 10: check memory (run 2) ---"
 python3 -c "
