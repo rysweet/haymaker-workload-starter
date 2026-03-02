@@ -142,7 +142,7 @@ class MyWorkload(WorkloadBase):
         await self.save_state(state)
 
         # Launch agent as detached subprocess (returns immediately)
-        self._execute_agent_detached(deployment_id, agent_dir, max_turns)
+        self._execute_agent_detached(deployment_id, agent_dir)
 
         # Persist PID for cross-process status detection
         proc = self._processes.get(deployment_id)
@@ -249,9 +249,9 @@ class MyWorkload(WorkloadBase):
         if temp_file and temp_file.exists():
             temp_file.unlink()
 
-        state.status = DeploymentStatus.COMPLETED
+        state.status = DeploymentStatus.STOPPED
         state.phase = "cleaned_up"
-        state.completed_at = datetime.now(tz=UTC)
+        state.stopped_at = datetime.now(tz=UTC)
         await self.save_state(state)
 
         return CleanupReport(
@@ -262,7 +262,7 @@ class MyWorkload(WorkloadBase):
         )
 
     async def get_logs(
-        self, deployment_id: str, follow: bool = False, lines: int = 100
+        self, deployment_id: str, *, lines: int = 100, **_kwargs: object
     ) -> AsyncIterator[str]:
         state = await self.get_status(deployment_id)
 
@@ -394,7 +394,7 @@ class MyWorkload(WorkloadBase):
 
         return agent_dir
 
-    def _execute_agent_detached(self, deployment_id: str, agent_dir: Path, max_turns: int) -> None:
+    def _execute_agent_detached(self, deployment_id: str, agent_dir: Path) -> None:
         """Launch the agent as a detached subprocess (fire-and-forget)."""
         main_py = agent_dir / "main.py"
         if not main_py.exists():
@@ -402,7 +402,7 @@ class MyWorkload(WorkloadBase):
             raise FileNotFoundError(f"Agent entry point not found: {main_py}")
 
         log_file = agent_dir / "agent.log"
-        self._append_log(deployment_id, f"Executing agent (max_turns={max_turns})")
+        self._append_log(deployment_id, "Executing agent")
         self._append_log(deployment_id, f"Agent log: {log_file}")
 
         self._agent_log_files[deployment_id] = log_file
@@ -416,9 +416,17 @@ class MyWorkload(WorkloadBase):
         err_file = agent_dir / "agent.err"
         ef = open(err_file, "w", buffering=1)  # noqa: SIM115
 
-        # Create duplicate fds for the child -- survives parent GC
+        # Create duplicate fds for the child -- survives parent GC.
+        # Wrap in try/finally so the first dup is cleaned up if the second fails.
         child_stdout_fd = os.dup(lf.fileno())
-        child_stderr_fd = os.dup(ef.fileno())
+        try:
+            child_stderr_fd = os.dup(ef.fileno())
+        except OSError:
+            os.close(child_stdout_fd)
+            ef.close()
+            lf.close()
+            self._log_file_handles.pop(deployment_id, None)
+            raise
 
         # Strip CLAUDECODE env var to prevent "cannot launch inside
         # another Claude Code session" error in the agent subprocess

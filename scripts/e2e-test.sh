@@ -50,7 +50,11 @@ echo "  RUN 1: First agent execution"
 echo "=========================================="
 
 echo "--- Step 3: deploy (run 1) ---"
-OUTPUT=$(haymaker deploy my-workload --config goal_file=goals/e2e-quick-test.md --config enable_memory=true --config max_turns=3 --yes 2>&1)
+OUTPUT=$(haymaker deploy my-workload --config goal_file=goals/e2e-quick-test.md --config enable_memory=true --config max_turns=3 --yes 2>&1) || {
+  echo "FAIL: haymaker deploy exited with code $?"
+  echo "Output: $OUTPUT"
+  exit 1
+}
 echo "$OUTPUT"
 DEP1=$(echo "$OUTPUT" | grep -oE 'my-workload-[a-f0-9]+' | head -1)
 echo "Deployment ID: $DEP1"
@@ -165,7 +169,11 @@ echo "  RUN 2: Second execution (memory recall)"
 echo "=========================================="
 
 echo "--- Step 8: deploy (run 2, same goal) ---"
-OUTPUT2=$(haymaker deploy my-workload --config goal_file=goals/e2e-quick-test.md --config enable_memory=true --config max_turns=3 --yes 2>&1)
+OUTPUT2=$(haymaker deploy my-workload --config goal_file=goals/e2e-quick-test.md --config enable_memory=true --config max_turns=3 --yes 2>&1) || {
+  echo "FAIL: haymaker deploy (run 2) exited with code $?"
+  echo "Output: $OUTPUT2"
+  exit 1
+}
 echo "$OUTPUT2"
 DEP2=$(echo "$OUTPUT2" | grep -oE 'my-workload-[a-f0-9]+' | head -1)
 echo "Deployment ID: $DEP2"
