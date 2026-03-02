@@ -78,7 +78,7 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
         name: 'D4'
         workloadProfileType: 'D4'
         minimumCount: 0
-        maximumCount: 1
+        maximumCount: 3
       }
     ]
   }
