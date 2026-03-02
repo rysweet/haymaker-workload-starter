@@ -1011,6 +1011,62 @@ class TestDeployPersistsPid:
         assert state.metadata.get("agent_pid") == 54321
 
 
+class TestAppendLog:
+    """Tests for _append_log: timestamping, buffering, and rotation."""
+
+    def _make_workload(self):
+        return MyWorkload(platform=_mock_platform())
+
+    def test_append_log_adds_message(self):
+        """Basic: message text appears in _logs buffer."""
+        wl = self._make_workload()
+        wl._logs["d1"] = []
+        wl._append_log("d1", "hello world")
+        assert any("hello world" in line for line in wl._logs["d1"])
+
+    def test_append_log_includes_timestamp(self):
+        """Each log line starts with [YYYY-MM-DD HH:MM:SS]."""
+        import re
+
+        wl = self._make_workload()
+        wl._logs["d2"] = []
+        wl._append_log("d2", "check ts")
+        line = wl._logs["d2"][-1]
+        assert re.match(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] ", line)
+
+    def test_append_log_rotation(self):
+        """When buffer exceeds _MAX_LOG_LINES, oldest entries are dropped."""
+        import haymaker_my_workload.workload as wmod
+
+        original = wmod._MAX_LOG_LINES
+        try:
+            wmod._MAX_LOG_LINES = 5
+            wl = self._make_workload()
+            wl._logs["d3"] = []
+            for i in range(7):
+                wl._append_log("d3", f"msg-{i}")
+            buf = wl._logs["d3"]
+            assert len(buf) == 5
+            # Oldest two (msg-0, msg-1) should be gone
+            texts = " ".join(buf)
+            assert "msg-0" not in texts
+            assert "msg-1" not in texts
+            # Most recent five should remain
+            for i in range(2, 7):
+                assert f"msg-{i}" in texts
+        finally:
+            wmod._MAX_LOG_LINES = original
+
+    def test_append_log_creates_buffer(self):
+        """Calling _append_log for a new deployment_id creates the buffer via setdefault."""
+        wl = self._make_workload()
+        assert "new-dep" not in wl._logs
+        wl._append_log("new-dep", "first message")
+        assert "new-dep" in wl._logs
+        assert len(wl._logs["new-dep"]) == 1
+        assert "first message" in wl._logs["new-dep"][0]
+
+
 @pytest.mark.integration
 class TestGeneratorIntegration:
     """Integration tests that exercise the real amplihack generator pipeline.
