@@ -145,7 +145,7 @@ if [ -n "$AGENT_DIR" ]; then
   echo "Agent dir: $AGENT_DIR"
   if [ -d "$AGENT_DIR" ]; then
     ls -la "$AGENT_DIR"/output/ 2>/dev/null && echo "PASS: output directory exists" || echo "WARN: no output directory"
-    cat "$AGENT_DIR"/output/result.txt 2>/dev/null || cat "$AGENT_DIR"/output/file-report.md 2>/dev/null | head -20 || true
+    { cat "$AGENT_DIR"/output/result.txt 2>/dev/null || cat "$AGENT_DIR"/output/file-report.md 2>/dev/null; } | head -20 || true
   fi
 fi
 

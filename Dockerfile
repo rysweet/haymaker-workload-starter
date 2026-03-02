@@ -27,19 +27,10 @@ RUN pip install --no-cache-dir "agent-haymaker @ git+https://github.com/rysweet/
     pip install --no-cache-dir "amplihack @ git+https://github.com/rysweet/amplihack.git" && \
     pip install --no-cache-dir --no-deps "amplihack-memory-lib @ git+https://github.com/rysweet/amplihack-memory-lib.git"
 
-# Run amplihack install to set up hooks, agents, and tools at $HOME/.amplihack/
-# This creates the directory structure that .claude/settings.json hooks reference.
-RUN python -m amplihack install
-
 # Install this workload
 COPY . .
 # --no-deps because deps were installed above from GitHub (not on PyPI)
 RUN pip install --no-cache-dir --no-deps .
-
-# Create a minimal .claude/settings.json for headless container operation.
-# The project settings.json is excluded via .dockerignore because its hooks
-# reference interactive tools that don't work in containers.
-RUN mkdir -p /app/.claude && echo '{"permissions":{"defaultMode":"bypassPermissions"}}' > /app/.claude/settings.json
 
 # Include E2E test script (used by CI to verify the deployment)
 COPY scripts/e2e-test.sh /usr/local/bin/haymaker-e2e-test
@@ -51,6 +42,15 @@ RUN useradd -m -s /bin/bash haymaker \
     && chown -R haymaker:haymaker /app
 USER haymaker
 ENV HOME=/home/haymaker
+
+# Run amplihack install AFTER switching to haymaker so $HOME/.amplihack/
+# is created in /home/haymaker/.amplihack/ (not /root/.amplihack/).
+RUN python -m amplihack install
+
+# Create a minimal .claude/settings.json for headless container operation.
+# The project settings.json is excluded via .dockerignore because its hooks
+# reference interactive tools that don't work in containers.
+RUN mkdir -p /app/.claude && echo '{"permissions":{"defaultMode":"bypassPermissions"}}' > /app/.claude/settings.json
 
 # Verify the workload is registered
 RUN haymaker workload list
