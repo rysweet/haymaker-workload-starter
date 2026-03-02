@@ -14,7 +14,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code CLI (required by claude-agent-sdk for AutoMode)
-RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @anthropic-ai/claude-code \
+    && claude --version
+
+# Ensure HOME is set (claude needs it for config/cache)
+ENV HOME=/root
 
 # Install agent-haymaker platform and amplihack from GitHub (not yet on PyPI)
 # Install deps sequentially to avoid resolver conflicts
