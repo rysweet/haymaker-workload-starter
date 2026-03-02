@@ -2,10 +2,19 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies (git needed for pip install from GitHub)
+# Install system dependencies (git for pip, Node.js for Claude Code CLI)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl git \
+    curl git ca-certificates gnupg \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+       | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
+       > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI (required by claude-agent-sdk for AutoMode)
+RUN npm install -g @anthropic-ai/claude-code
 
 # Install agent-haymaker platform and amplihack from GitHub (not yet on PyPI)
 # Install deps sequentially to avoid resolver conflicts
