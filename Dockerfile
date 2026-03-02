@@ -39,6 +39,12 @@ RUN pip install --no-cache-dir --no-deps .
 COPY scripts/e2e-test.sh /usr/local/bin/haymaker-e2e-test
 RUN chmod +x /usr/local/bin/haymaker-e2e-test
 
+# Remove project-level .claude/settings.json to prevent amplihack hooks
+# from firing inside the container (they reference tools not installed here).
+# The claude CLI walks up the directory tree and finds this file, then tries
+# to execute hooks that don't exist in the container environment.
+RUN rm -rf /app/.claude /app/.amplihack
+
 # Verify the workload is registered
 RUN haymaker workload list
 
