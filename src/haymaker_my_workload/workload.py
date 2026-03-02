@@ -27,6 +27,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO
 
+from agent_haymaker.events import (
+    DEPLOYMENT_COMPLETED,
+    DEPLOYMENT_FAILED,
+    DEPLOYMENT_STARTED,
+    DEPLOYMENT_STOPPED,
+)
 from agent_haymaker.workloads.base import (
     DeploymentNotFoundError,
     WorkloadBase,
@@ -151,6 +157,10 @@ class MyWorkload(WorkloadBase):
             },
         )
         await self.save_state(state)
+        try:
+            await self.emit_event(DEPLOYMENT_STARTED, deployment_id, goal_summary=goal_summary)
+        except Exception:
+            logger.debug("Failed to emit DEPLOYMENT_STARTED for %s", deployment_id)
 
         # Launch agent as detached subprocess (returns immediately)
         self._execute_agent_detached(deployment_id, agent_dir)
@@ -177,10 +187,18 @@ class MyWorkload(WorkloadBase):
                 if rc == 0:
                     state.status = DeploymentStatus.COMPLETED
                     state.phase = "completed"
+                    try:
+                        await self.emit_event(DEPLOYMENT_COMPLETED, deployment_id)
+                    except Exception:
+                        logger.debug("Failed to emit DEPLOYMENT_COMPLETED for %s", deployment_id)
                 else:
                     state.status = DeploymentStatus.FAILED
                     state.phase = "failed"
                     state.error = f"Agent exited with code {rc}"
+                    try:
+                        await self.emit_event(DEPLOYMENT_FAILED, deployment_id, error=state.error)
+                    except Exception:
+                        logger.debug("Failed to emit DEPLOYMENT_FAILED for %s", deployment_id)
                 state.completed_at = datetime.now(tz=UTC)
                 await self.save_state(state)
 
@@ -205,6 +223,10 @@ class MyWorkload(WorkloadBase):
                     state.phase = "failed"
                     state.error = "Agent process exited unexpectedly (PID no longer exists)"
                     state.completed_at = datetime.now(tz=UTC)
+                    try:
+                        await self.emit_event(DEPLOYMENT_FAILED, deployment_id, error=state.error)
+                    except Exception:
+                        logger.debug("Failed to emit DEPLOYMENT_FAILED for %s", deployment_id)
                 await self.save_state(state)
 
             elif not pid:
@@ -232,6 +254,10 @@ class MyWorkload(WorkloadBase):
         state.status = DeploymentStatus.STOPPED
         state.phase = "stopped"
         state.stopped_at = datetime.now(tz=UTC)
+        try:
+            await self.emit_event(DEPLOYMENT_STOPPED, deployment_id)
+        except Exception:
+            logger.debug("Failed to emit DEPLOYMENT_STOPPED for %s", deployment_id)
         await self.save_state(state)
         return True
 
@@ -263,6 +289,10 @@ class MyWorkload(WorkloadBase):
         state.status = DeploymentStatus.STOPPED
         state.phase = "cleaned_up"
         state.stopped_at = datetime.now(tz=UTC)
+        try:
+            await self.emit_event(DEPLOYMENT_STOPPED, deployment_id)
+        except Exception:
+            logger.debug("Failed to emit DEPLOYMENT_STOPPED for %s", deployment_id)
         await self.save_state(state)
 
         return CleanupReport(
