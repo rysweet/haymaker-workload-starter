@@ -44,6 +44,17 @@ logger = logging.getLogger(__name__)
 _TERMINAL_STATES = frozenset({DeploymentStatus.COMPLETED, DeploymentStatus.FAILED})
 _MAX_LOG_LINES = 10_000
 _VALID_SDKS = ("claude", "copilot", "microsoft", "mini")
+
+# Default config values (#22) -- used by both deploy() and validate_config()
+_DEFAULT_SDK = "claude"
+_DEFAULT_ENABLE_MEMORY = False
+_DEFAULT_MAX_TURNS = 15
+
+# File name constants (#23)
+_AGENT_LOG = "agent.log"
+_AGENT_ERR = "agent.err"
+_AGENT_MAIN = "main.py"
+
 _DEFAULT_GOAL = """\
 # Default Goal
 
@@ -91,9 +102,8 @@ class MyWorkload(WorkloadBase):
 
         deployment_id = f"{self.name}-{uuid.uuid4().hex[:8]}"
         goal_file = config.workload_config.get("goal_file")
-        sdk = config.workload_config.get("sdk", "claude")
-        enable_memory = config.workload_config.get("enable_memory", False)
-        max_turns = config.workload_config.get("max_turns", 15)
+        sdk = config.workload_config.get("sdk", _DEFAULT_SDK)
+        enable_memory = config.workload_config.get("enable_memory", _DEFAULT_ENABLE_MEMORY)
 
         self._logs[deployment_id] = []
         self._append_log(deployment_id, f"Starting deployment {deployment_id}")
@@ -124,7 +134,7 @@ class MyWorkload(WorkloadBase):
         goal_text = goal_path.read_text()
         goal_summary = goal_text.split("\n")[0].strip("# ").strip() or "Goal agent"
 
-        # Persist state
+        # Persist state (#21: max_turns removed -- agent reads it from generated main.py)
         state = DeploymentState(
             deployment_id=deployment_id,
             workload_name=self.name,
@@ -136,7 +146,6 @@ class MyWorkload(WorkloadBase):
                 "goal_summary": goal_summary,
                 "sdk": sdk,
                 "agent_dir": str(agent_dir),
-                "max_turns": max_turns,
             },
         )
         await self.save_state(state)
@@ -276,7 +285,7 @@ class MyWorkload(WorkloadBase):
         if log_file is None:
             agent_dir_str = (state.metadata or {}).get("agent_dir")
             if agent_dir_str:
-                candidate = Path(agent_dir_str) / "agent.log"
+                candidate = Path(agent_dir_str) / _AGENT_LOG
                 if candidate.exists():
                     log_file = candidate
 
@@ -297,15 +306,15 @@ class MyWorkload(WorkloadBase):
             except ValueError as e:
                 errors.append(str(e))
 
-        sdk = wc.get("sdk", "claude")
+        sdk = wc.get("sdk", _DEFAULT_SDK)
         if sdk not in _VALID_SDKS:
             errors.append(f"sdk must be one of: {', '.join(_VALID_SDKS)} (got '{sdk}')")
 
-        max_turns = wc.get("max_turns", 15)
+        max_turns = wc.get("max_turns", _DEFAULT_MAX_TURNS)
         if not isinstance(max_turns, int) or max_turns < 1 or max_turns > 100:
             errors.append("max_turns must be an integer between 1 and 100")
 
-        enable_memory = wc.get("enable_memory", False)
+        enable_memory = wc.get("enable_memory", _DEFAULT_ENABLE_MEMORY)
         if not isinstance(enable_memory, bool):
             errors.append("enable_memory must be a boolean (true/false)")
 
@@ -396,12 +405,12 @@ class MyWorkload(WorkloadBase):
 
     def _execute_agent_detached(self, deployment_id: str, agent_dir: Path) -> None:
         """Launch the agent as a detached subprocess (fire-and-forget)."""
-        main_py = agent_dir / "main.py"
+        main_py = agent_dir / _AGENT_MAIN
         if not main_py.exists():
             self._append_log(deployment_id, f"ERROR: {main_py} not found")
             raise FileNotFoundError(f"Agent entry point not found: {main_py}")
 
-        log_file = agent_dir / "agent.log"
+        log_file = agent_dir / _AGENT_LOG
         self._append_log(deployment_id, "Executing agent")
         self._append_log(deployment_id, f"Agent log: {log_file}")
 
@@ -413,7 +422,7 @@ class MyWorkload(WorkloadBase):
         lf = open(log_file, "w", buffering=1)  # noqa: SIM115  # line-buffered
         self._log_file_handles[deployment_id] = lf
 
-        err_file = agent_dir / "agent.err"
+        err_file = agent_dir / _AGENT_ERR
         ef = open(err_file, "w", buffering=1)  # noqa: SIM115
 
         # Create duplicate fds for the child -- survives parent GC.
@@ -434,7 +443,7 @@ class MyWorkload(WorkloadBase):
 
         try:
             proc = subprocess.Popen(
-                ["python3", "-u", "main.py"],  # -u: unbuffered stdout/stderr
+                ["python3", "-u", _AGENT_MAIN],  # -u: unbuffered stdout/stderr
                 stdout=child_stdout_fd,
                 stderr=child_stderr_fd,
                 cwd=str(agent_dir),
@@ -494,7 +503,7 @@ class MyWorkload(WorkloadBase):
         agent_dir_str = (state.metadata or {}).get("agent_dir")
         if not agent_dir_str:
             return False
-        log_file = Path(agent_dir_str) / "agent.log"
+        log_file = Path(agent_dir_str) / _AGENT_LOG
         if not log_file.exists():
             return False
         last_line = self._read_last_line(log_file)
