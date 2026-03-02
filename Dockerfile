@@ -45,6 +45,13 @@ RUN mkdir -p /app/.claude && echo '{"permissions":{"defaultMode":"bypassPermissi
 COPY scripts/e2e-test.sh /usr/local/bin/haymaker-e2e-test
 RUN chmod +x /usr/local/bin/haymaker-e2e-test
 
+# Create non-root user for agent execution.
+# Claude Code refuses --dangerously-skip-permissions as root.
+RUN useradd -m -s /bin/bash haymaker \
+    && chown -R haymaker:haymaker /app
+USER haymaker
+ENV HOME=/home/haymaker
+
 # Verify the workload is registered
 RUN haymaker workload list
 
