@@ -5,6 +5,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from agent_haymaker.events import (
+    DEPLOYMENT_COMPLETED,
+    DEPLOYMENT_FAILED,
+    DEPLOYMENT_STARTED,
+    DEPLOYMENT_STOPPED,
+)
 from agent_haymaker.workloads.base import DeploymentNotFoundError
 from agent_haymaker.workloads.models import (
     DeploymentConfig,
@@ -33,6 +39,7 @@ def _mock_platform():
     platform.load_deployment_state = AsyncMock(side_effect=load)
     platform.list_deployments = AsyncMock(side_effect=list_deps)
     platform.get_credential = AsyncMock(return_value=None)
+    platform.publish_event = AsyncMock()
     platform.log = MagicMock()
     platform._storage = storage
     return platform
@@ -1065,6 +1072,215 @@ class TestAppendLog:
         assert "new-dep" in wl._logs
         assert len(wl._logs["new-dep"]) == 1
         assert "first message" in wl._logs["new-dep"][0]
+
+
+class TestEventEmission:
+    """TDD tests for EventEmitterMixin integration in MyWorkload.
+
+    These tests verify that MyWorkload emits the correct events via the
+    platform event bus at lifecycle transitions (deploy, complete, fail, stop).
+    They are expected to FAIL until workload.py is updated to inherit
+    EventEmitterMixin and call emit_event at the appropriate points.
+    """
+
+    @pytest.fixture()
+    def platform(self):
+        return _mock_platform()
+
+    @pytest.fixture()
+    def workload(self, platform):
+        return MyWorkload(platform=platform)
+
+    async def test_deploy_emits_started(self, workload, platform, tmp_path):
+        """deploy() should emit DEPLOYMENT_STARTED when a deployment begins."""
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        (agent_dir / "main.py").write_text("import sys; sys.exit(0)\n")
+
+        mock_gen = AsyncMock(return_value=agent_dir)
+        mock_proc = MagicMock(spec=subprocess.Popen)
+        mock_proc.pid = 111
+        mock_proc.poll.return_value = None
+
+        with (
+            patch.object(workload, "_generate_agent", mock_gen),
+            patch("haymaker_my_workload.workload.subprocess.Popen", return_value=mock_proc),
+        ):
+            await workload.deploy(DeploymentConfig(workload_name="my-workload"))
+
+        # publish_event must have been called with DEPLOYMENT_STARTED topic
+        topics = [call.args[0] for call in platform.publish_event.call_args_list]
+        assert DEPLOYMENT_STARTED in topics, (
+            f"Expected {DEPLOYMENT_STARTED!r} in published topics, got {topics}"
+        )
+
+    async def test_get_status_emits_completed(self, workload, platform, tmp_path):
+        """When agent process exits with rc=0, emit DEPLOYMENT_COMPLETED."""
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+
+        mock_proc = MagicMock(spec=subprocess.Popen)
+        mock_proc.poll.return_value = 0  # exited successfully
+        mock_proc.pid = 222
+
+        dep_id = "test-emit-completed"
+        workload._processes[dep_id] = mock_proc
+
+        state = DeploymentState(
+            deployment_id=dep_id,
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir)},
+        )
+        await workload.save_state(state)
+
+        await workload.get_status(dep_id)
+
+        topics = [call.args[0] for call in platform.publish_event.call_args_list]
+        assert DEPLOYMENT_COMPLETED in topics, (
+            f"Expected {DEPLOYMENT_COMPLETED!r} in published topics, got {topics}"
+        )
+
+    async def test_get_status_emits_failed(self, workload, platform, tmp_path):
+        """When agent process exits with rc!=0, emit DEPLOYMENT_FAILED."""
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+
+        mock_proc = MagicMock(spec=subprocess.Popen)
+        mock_proc.poll.return_value = 1  # non-zero exit
+        mock_proc.pid = 333
+
+        dep_id = "test-emit-failed"
+        workload._processes[dep_id] = mock_proc
+
+        state = DeploymentState(
+            deployment_id=dep_id,
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir)},
+        )
+        await workload.save_state(state)
+
+        await workload.get_status(dep_id)
+
+        topics = [call.args[0] for call in platform.publish_event.call_args_list]
+        assert DEPLOYMENT_FAILED in topics, (
+            f"Expected {DEPLOYMENT_FAILED!r} in published topics, got {topics}"
+        )
+
+    async def test_get_status_pid_dead_emits_failed(self, workload, platform, tmp_path):
+        """When the PID is dead and log is inconclusive, emit DEPLOYMENT_FAILED."""
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        (agent_dir / "agent.log").write_text("")  # empty log -- inconclusive
+
+        dep_id = "test-emit-pid-dead"
+        state = DeploymentState(
+            deployment_id=dep_id,
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir), "agent_pid": 999999},
+        )
+        await workload.save_state(state)
+
+        with patch("haymaker_my_workload.workload.os.kill", side_effect=ProcessLookupError):
+            await workload.get_status(dep_id)
+
+        topics = [call.args[0] for call in platform.publish_event.call_args_list]
+        assert DEPLOYMENT_FAILED in topics, (
+            f"Expected {DEPLOYMENT_FAILED!r} in published topics, got {topics}"
+        )
+
+    async def test_stop_emits_stopped(self, workload, platform, tmp_path):
+        """stop() should emit DEPLOYMENT_STOPPED."""
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+
+        mock_proc = MagicMock(spec=subprocess.Popen)
+        mock_proc.poll.return_value = None  # still running
+        mock_proc.wait.return_value = 0
+        mock_proc.pid = 444
+
+        dep_id = "test-emit-stopped"
+        workload._processes[dep_id] = mock_proc
+
+        state = DeploymentState(
+            deployment_id=dep_id,
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir)},
+        )
+        await workload.save_state(state)
+
+        await workload.stop(dep_id)
+
+        topics = [call.args[0] for call in platform.publish_event.call_args_list]
+        assert DEPLOYMENT_STOPPED in topics, (
+            f"Expected {DEPLOYMENT_STOPPED!r} in published topics, got {topics}"
+        )
+
+    async def test_event_failure_doesnt_break_deploy(self, workload, platform, tmp_path):
+        """If publish_event raises an exception, deploy() should still succeed."""
+        platform.publish_event = AsyncMock(side_effect=RuntimeError("event bus down"))
+
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        (agent_dir / "main.py").write_text("import sys; sys.exit(0)\n")
+
+        mock_gen = AsyncMock(return_value=agent_dir)
+        mock_proc = MagicMock(spec=subprocess.Popen)
+        mock_proc.pid = 555
+        mock_proc.poll.return_value = None
+
+        with (
+            patch.object(workload, "_generate_agent", mock_gen),
+            patch("haymaker_my_workload.workload.subprocess.Popen", return_value=mock_proc),
+        ):
+            dep_id = await workload.deploy(DeploymentConfig(workload_name="my-workload"))
+
+        # deploy should succeed despite event bus failure
+        assert dep_id.startswith("my-workload-")
+
+    async def test_cleanup_running_emits_stopped(self, workload, platform, tmp_path):
+        """cleanup() emits DEPLOYMENT_STOPPED when terminating a running deployment."""
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+
+        mock_proc = MagicMock(spec=subprocess.Popen)
+        mock_proc.poll.return_value = None  # still running
+        mock_proc.wait.return_value = 0
+        mock_proc.pid = 666
+
+        dep_id = "test-cleanup-event"
+        workload._processes[dep_id] = mock_proc
+
+        state = DeploymentState(
+            deployment_id=dep_id,
+            workload_name="my-workload",
+            status=DeploymentStatus.RUNNING,
+            phase="executing",
+            metadata={"agent_dir": str(agent_dir)},
+        )
+        await workload.save_state(state)
+
+        await workload.cleanup(dep_id)
+
+        topics = [call.args[0] for call in platform.publish_event.call_args_list]
+        assert DEPLOYMENT_STOPPED in topics, (
+            f"Expected {DEPLOYMENT_STOPPED!r} in published topics, got {topics}"
+        )
+
+    async def test_no_platform_no_crash(self):
+        """With platform=None, emit_event should be a no-op (no crash)."""
+        workload = MyWorkload(platform=None)
+
+        # Calling emit_event directly should not raise
+        # This verifies the mixin guards on self._platform being None
+        await workload.emit_event(DEPLOYMENT_STARTED, "test-no-platform")
 
 
 @pytest.mark.integration
