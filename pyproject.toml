@@ -19,8 +19,10 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    "agent-haymaker>=0.1.0",
-    "amplihack>=0.9.0",
+    # Dependency chain: amplihack (goal-seeking generator) -> agent-haymaker -> this package.
+    # Improvements to amplihack.agent.LearningAgent automatically flow into MyWorkload.
+    "agent-haymaker>=0.2.0",
+    "amplihack>=0.5.115",
 ]
 
 [project.optional-dependencies]
