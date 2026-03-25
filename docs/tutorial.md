@@ -64,7 +64,6 @@ You also need credentials for at least one SDK:
 | Claude | `export ANTHROPIC_API_KEY=sk-ant-...` |
 | Copilot | `export GH_TOKEN=$(gh auth token)` |
 | Microsoft | `export AZURE_OPENAI_ENDPOINT=https://your-instance.openai.azure.com/` and `export AZURE_OPENAI_DEPLOYMENT=gpt-5` |
-| Mini | `export ANTHROPIC_API_KEY=sk-ant-...` (uses litellm) |
 
 ---
 
@@ -345,7 +344,6 @@ Logs show `[AUTO MICROSOFT]` prefix. Uses Azure OpenAI.
 
 **Setup:** You need an Azure OpenAI resource with a model deployed. Set the endpoint and deployment name in environment variables.
 
-### Mini SDK (litellm)
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_API_KEY
@@ -360,7 +358,6 @@ haymaker deploy my-workload \
 Deployment started: my-workload-323c3fdb
 ```
 
-Logs show `[AUTO MINI]` prefix. Lightweight -- uses litellm under the hood, works with any LLM provider.
 
 ---
 
