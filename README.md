@@ -93,7 +93,6 @@ haymaker-workload-starter/
 | `claude` | `ANTHROPIC_API_KEY` | General tasks, deep reasoning |
 | `copilot` | `GH_TOKEN` | Code generation, git operations |
 | `microsoft` | Azure OpenAI + DefaultAzureCredential | Azure workloads |
-| `mini` | Any LLM API key via litellm | Lightweight tasks |
 
 ## Documentation
 
